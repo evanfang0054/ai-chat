@@ -1,0 +1,7 @@
+{
+  "extends": "@ai-chat/tsconfig/base.json",
+  "compilerOptions": {
+    "baseUrl": "."
+  },
+  "include": ["src"]
+}

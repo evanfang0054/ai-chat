@@ -1,6 +1,13 @@
 .worktrees/
-node_modules/
-.pnpm-store/
+node_modules
+.pnpm-store
 .env
 .env.local
 .env.*.local
+dist
+build
+coverage
+.turbo
+.prisma
+apps/api/generated
+.watchman-cookie-*

@@ -1,0 +1,9 @@
+{
+  "extends": "@ai-chat/tsconfig/nestjs.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "./dist",
+    "noEmit": false
+  },
+  "include": ["src"]
+}
