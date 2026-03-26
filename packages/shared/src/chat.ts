@@ -1,4 +1,8 @@
-import type { ToolExecutionSummary } from './tool';
+import type {
+  ToolExecutionFailedSummary,
+  ToolExecutionRunningSummary,
+  ToolExecutionSucceededSummary,
+} from './tool';
 
 export type ChatMessageRole = 'USER' | 'ASSISTANT' | 'SYSTEM';
 
@@ -40,17 +44,17 @@ export interface ChatRunStartedEvent {
 
 export interface ChatToolStartedEvent {
   type: 'tool_started';
-  toolExecution: ToolExecutionSummary;
+  toolExecution: ToolExecutionRunningSummary;
 }
 
 export interface ChatToolCompletedEvent {
   type: 'tool_completed';
-  toolExecution: ToolExecutionSummary;
+  toolExecution: ToolExecutionSucceededSummary;
 }
 
 export interface ChatToolFailedEvent {
   type: 'tool_failed';
-  toolExecution: ToolExecutionSummary;
+  toolExecution: ToolExecutionFailedSummary;
 }
 
 export interface ChatTextDeltaEvent {

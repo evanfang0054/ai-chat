@@ -13,3 +13,34 @@ export interface ToolExecutionSummary {
   startedAt: string | null;
   finishedAt: string | null;
 }
+
+export type ToolExecutionRunningSummary = Omit<
+  ToolExecutionSummary,
+  'status' | 'output' | 'errorMessage' | 'startedAt' | 'finishedAt'
+> & {
+  status: 'RUNNING';
+  output: null;
+  errorMessage: null;
+  startedAt: string;
+  finishedAt: null;
+};
+
+export type ToolExecutionSucceededSummary = Omit<
+  ToolExecutionSummary,
+  'status' | 'errorMessage' | 'startedAt' | 'finishedAt'
+> & {
+  status: 'SUCCEEDED';
+  errorMessage: null;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type ToolExecutionFailedSummary = Omit<
+  ToolExecutionSummary,
+  'status' | 'errorMessage' | 'startedAt' | 'finishedAt'
+> & {
+  status: 'FAILED';
+  errorMessage: string;
+  startedAt: string;
+  finishedAt: string;
+};
