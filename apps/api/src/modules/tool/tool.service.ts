@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma, ToolExecution } from '@prisma/client';
+import type { ToolExecution } from '@prisma/client';
 import { ToolExecutionStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import type { ToolDefinition, ToolExecutionContext } from './tool.types';
+import type { ToolDefinition, ToolExecutionContext, ToolInput, ToolMetadata } from './tool.types';
 import { getCurrentTimeTool } from './tools/get-current-time.tool';
 
 class ToolExecutionError extends Error {
@@ -20,11 +20,11 @@ export class ToolService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  listDefinitions() {
-    return Array.from(this.tools.values());
+  listDefinitions(): ToolMetadata[] {
+    return Array.from(this.tools.values(), ({ name, description }) => ({ name, description }));
   }
 
-  async executeTool(name: string, input: Prisma.InputJsonValue, context: ToolExecutionContext) {
+  async executeTool(name: string, input: ToolInput, context: ToolExecutionContext) {
     const tool = this.tools.get(name);
 
     if (!tool) {
