@@ -15,6 +15,16 @@ export class ChatController {
     private readonly agentService: AgentService
   ) {}
 
+  private normalizeStreamEventSessionId<T extends { toolExecution: { sessionId: string } }>(event: T, sessionId: string): T {
+    return {
+      ...event,
+      toolExecution: {
+        ...event.toolExecution,
+        sessionId
+      }
+    };
+  }
+
   @Get('sessions')
   listSessions(@CurrentUser() user: CurrentUserPayload) {
     return this.chatService.listSessions(user.userId);
@@ -65,10 +75,22 @@ export class ChatController {
     let assistantText = '';
 
     try {
-      for await (const event of this.agentService.streamChatReply({ history, prompt: content })) {
+      for await (const event of this.agentService.streamChatReply({
+        userId: user.userId,
+        sessionId: session.id,
+        history,
+        prompt: content
+      })) {
         if (event.type === 'text_delta') {
           assistantText += event.delta;
           res.write(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
+          continue;
+        }
+
+        if (event.type === 'tool_started' || event.type === 'tool_completed' || event.type === 'tool_failed') {
+          res.write(
+            `event: message\ndata: ${JSON.stringify(this.normalizeStreamEventSessionId(event, session.id))}\n\n`
+          );
         }
       }
 
@@ -82,8 +104,9 @@ export class ChatController {
         })}\n\n`
       );
       res.end();
-    } catch {
-      res.write(`event: message\ndata: ${JSON.stringify({ type: 'run_failed', message: 'Chat stream failed' })}\n\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Chat stream failed';
+      res.write(`event: message\ndata: ${JSON.stringify({ type: 'run_failed', message })}\n\n`);
       res.end();
     }
   }

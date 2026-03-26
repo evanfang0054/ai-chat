@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { ToolExecution } from '@prisma/client';
+import type { Prisma, ToolExecution } from '@prisma/client';
 import { ToolExecutionStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { ToolDefinition, ToolExecutionContext, ToolInput, ToolMetadata } from './tool.types';
@@ -24,7 +24,15 @@ export class ToolService {
     return Array.from(this.tools.values(), ({ name, description }) => ({ name, description }));
   }
 
-  async executeTool(name: string, input: ToolInput, context: ToolExecutionContext) {
+  getDefinition(name: string) {
+    return this.tools.get(name) ?? null;
+  }
+
+  private toJsonValue(value: ToolInput): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+
+  async startToolExecution(name: string, input: ToolInput, context: ToolExecutionContext) {
     const tool = this.tools.get(name);
 
     if (!tool) {
@@ -36,36 +44,46 @@ export class ToolService {
         sessionId: context.sessionId,
         toolName: tool.name,
         status: ToolExecutionStatus.RUNNING,
-        input
+        input: this.toJsonValue(input)
       }
     });
 
-    try {
-      const output = await tool.execute(input, context);
-      const outputText = JSON.stringify(output);
-      const finishedAt = new Date();
-      const updatedExecution = await this.prisma.toolExecution.update({
-        where: { id: execution.id },
-        data: {
-          status: ToolExecutionStatus.SUCCEEDED,
-          output: outputText,
-          finishedAt
-        }
-      });
+    return {
+      execution,
+      run: async () => {
+        try {
+          const output = await tool.execute(input, context);
+          const outputText = JSON.stringify(output);
+          const finishedAt = new Date();
+          const updatedExecution = await this.prisma.toolExecution.update({
+            where: { id: execution.id },
+            data: {
+              status: ToolExecutionStatus.SUCCEEDED,
+              output: outputText,
+              finishedAt
+            }
+          });
 
-      return { execution: updatedExecution, outputText };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Tool execution failed';
-      const failedExecution = await this.prisma.toolExecution.update({
-        where: { id: execution.id },
-        data: {
-          status: ToolExecutionStatus.FAILED,
-          errorMessage: message,
-          finishedAt: new Date()
-        }
-      });
+          return { execution: updatedExecution, outputText };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Tool execution failed';
+          const failedExecution = await this.prisma.toolExecution.update({
+            where: { id: execution.id },
+            data: {
+              status: ToolExecutionStatus.FAILED,
+              errorMessage: message,
+              finishedAt: new Date()
+            }
+          });
 
-      throw new ToolExecutionError(message, failedExecution);
-    }
+          throw new ToolExecutionError(message, failedExecution);
+        }
+      }
+    };
+  }
+
+  async executeTool(name: string, input: ToolInput, context: ToolExecutionContext) {
+    const started = await this.startToolExecution(name, input, context);
+    return started.run();
   }
 }
