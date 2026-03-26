@@ -2,7 +2,6 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
 
 describe('UsersController (e2e)', () => {
   let app: INestApplication;
@@ -12,8 +11,14 @@ describe('UsersController (e2e)', () => {
 
   beforeAll(async () => {
     process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ai_chat';
+    process.env.REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
     process.env.JWT_SECRET = process.env.JWT_SECRET || 'change-me';
+    process.env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || 'test-key';
+    process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+    process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
     prisma = new PrismaClient();
+
+    const { AppModule } = await import('../src/app.module');
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule]
@@ -74,6 +79,11 @@ describe('UsersController (e2e)', () => {
       .expect(200);
 
     expect(response.body).toEqual(expect.any(Array));
-    expect(response.body.length).toBeGreaterThanOrEqual(2);
+    expect(response.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ email: 'admin@example.com', role: 'ADMIN' }),
+        expect.objectContaining({ email: 'user@example.com', role: 'USER' })
+      ])
+    );
   });
 });
