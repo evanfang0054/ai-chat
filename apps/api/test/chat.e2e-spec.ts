@@ -1,9 +1,8 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 
-const createStream = async function* (...events: Array<{ type: string; text?: string }>) {
+const createStream = async function* (...events: Array<{ type: string; delta?: string }>) {
   for (const event of events) {
     yield event;
   }
@@ -11,10 +10,10 @@ const createStream = async function* (...events: Array<{ type: string; text?: st
 
 describe('ChatController (e2e)', () => {
   let app: INestApplication;
-  let prisma: PrismaClient;
-  let shouldFailLlm = false;
-  const llmService = {
-    streamChat: jest.fn()
+  let prisma: any;
+  let shouldFailAgent = false;
+  const agentService = {
+    streamChatReply: jest.fn()
   };
 
   beforeAll(async () => {
@@ -25,28 +24,27 @@ describe('ChatController (e2e)', () => {
     process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
     process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
-    prisma = new PrismaClient();
-
     const { AppModule } = await import('../src/app.module');
-    const { LlmService } = await import('../src/modules/llm/llm.service');
+    const { AgentService } = await import('../src/modules/agent/agent.service');
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule]
     })
-      .overrideProvider(LlmService)
-      .useValue(llmService)
+      .overrideProvider(AgentService)
+      .useValue(agentService)
       .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
+    prisma = app.get((await import('../src/common/prisma/prisma.service')).PrismaService);
     await prisma.chatMessage.deleteMany();
     await prisma.chatSession.deleteMany();
     await prisma.user.deleteMany();
   });
 
   beforeEach(async () => {
-    llmService.streamChat.mockReset();
-    shouldFailLlm = false;
+    agentService.streamChatReply.mockReset();
+    shouldFailAgent = false;
     await prisma.chatMessage.deleteMany();
     await prisma.chatSession.deleteMany();
     await prisma.user.deleteMany();
@@ -185,11 +183,11 @@ describe('ChatController (e2e)', () => {
   });
 
   it('POST /chat/stream creates a session, streams assistant output, and saves messages', async () => {
-    llmService.streamChat.mockImplementation(() =>
+    agentService.streamChatReply.mockImplementation(() =>
       createStream(
-        { type: 'delta', text: 'Hello' },
-        { type: 'delta', text: ' world' },
-        { type: 'completed' }
+        { type: 'text_delta', delta: 'Hello' },
+        { type: 'text_delta', delta: ' world' },
+        { type: 'run_completed' }
       )
     );
 
@@ -216,7 +214,7 @@ describe('ChatController (e2e)', () => {
 
     expect(payloads).toHaveLength(4);
     expect(payloads[0]).toMatchObject({
-      type: 'started',
+      type: 'run_started',
       session: {
         title: 'Tell me something nice',
         model: 'deepseek-chat'
@@ -226,10 +224,10 @@ describe('ChatController (e2e)', () => {
         content: 'Tell me something nice'
       }
     });
-    expect(payloads[1]).toEqual({ type: 'delta', delta: 'Hello' });
-    expect(payloads[2]).toEqual({ type: 'delta', delta: ' world' });
+    expect(payloads[1]).toEqual({ type: 'text_delta', delta: 'Hello' });
+    expect(payloads[2]).toEqual({ type: 'text_delta', delta: ' world' });
     expect(payloads[3]).toMatchObject({
-      type: 'completed',
+      type: 'run_completed',
       session: {
         id: payloads[0].session.id,
         title: 'Tell me something nice'
@@ -240,12 +238,10 @@ describe('ChatController (e2e)', () => {
       }
     });
 
-    expect(llmService.streamChat).toHaveBeenCalledWith([
-      {
-        role: 'user',
-        content: 'Tell me something nice'
-      }
-    ]);
+    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      history: [],
+      prompt: 'Tell me something nice'
+    });
 
     const sessions = await prisma.chatSession.findMany({
       where: { userId: user.body.user.id },
@@ -258,25 +254,25 @@ describe('ChatController (e2e)', () => {
 
     expect(sessions).toHaveLength(1);
     expect(sessions[0].title).toBe('Tell me something nice');
-    expect(sessions[0].messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
+    expect(sessions[0].messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
       { role: 'USER', content: 'Tell me something nice' },
       { role: 'ASSISTANT', content: 'Hello world' }
     ]);
   });
 
-  it('POST /chat/stream emits error event and does not persist assistant on llm failure', async () => {
-    llmService.streamChat.mockImplementation(async function* () {
-      if (shouldFailLlm) {
-        throw new Error('llm failed');
+  it('POST /chat/stream emits error event and does not persist assistant on agent failure', async () => {
+    agentService.streamChatReply.mockImplementation(async function* () {
+      if (shouldFailAgent) {
+        throw new Error('agent failed');
       }
 
-      yield { type: 'completed' as const };
+      yield { type: 'run_completed' as const };
     });
-    shouldFailLlm = true;
+    shouldFailAgent = true;
 
     const user = await request(app.getHttpServer())
       .post('/auth/register')
-      .send({ email: 'llmfail@example.com', password: 'password123' })
+      .send({ email: 'agentfail@example.com', password: 'password123' })
       .expect(201);
 
     const response = await request(app.getHttpServer())
@@ -286,7 +282,7 @@ describe('ChatController (e2e)', () => {
       .send({ content: 'Trigger failure' })
       .expect(201);
 
-    expect(response.text).toContain('"type":"error"');
+    expect(response.text).toContain('"type":"run_failed"');
 
     const session = await prisma.chatSession.findFirstOrThrow({
       where: { userId: user.body.user.id }
@@ -302,11 +298,11 @@ describe('ChatController (e2e)', () => {
   });
 
   it('POST /chat/stream appends to an existing session and keeps prior history', async () => {
-    llmService.streamChat.mockImplementation(() =>
+    agentService.streamChatReply.mockImplementation(() =>
       createStream(
-        { type: 'delta', text: 'Second' },
-        { type: 'delta', text: ' reply' },
-        { type: 'completed' }
+        { type: 'text_delta', delta: 'Second' },
+        { type: 'text_delta', delta: ' reply' },
+        { type: 'run_completed' }
       )
     );
 
@@ -355,27 +351,29 @@ describe('ChatController (e2e)', () => {
       .map((line) => JSON.parse(line.slice(6)));
 
     expect(payloads[0]).toMatchObject({
-      type: 'started',
+      type: 'run_started',
       session: { id: 'existing-session' },
       userMessage: { role: 'USER', content: 'Second question' }
     });
     expect(payloads[payloads.length - 1]).toMatchObject({
-      type: 'completed',
+      type: 'run_completed',
       message: { role: 'ASSISTANT', content: 'Second reply' }
     });
 
-    expect(llmService.streamChat).toHaveBeenCalledWith([
-      { role: 'user', content: 'First question' },
-      { role: 'assistant', content: 'First answer' },
-      { role: 'user', content: 'Second question' }
-    ]);
+    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      history: [
+        { role: 'USER', content: 'First question' },
+        { role: 'ASSISTANT', content: 'First answer' }
+      ],
+      prompt: 'Second question'
+    });
 
     const messages = await prisma.chatMessage.findMany({
       where: { sessionId: 'existing-session' },
       orderBy: { createdAt: 'asc' }
     });
 
-    expect(messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
+    expect(messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
       { role: 'USER', content: 'First question' },
       { role: 'ASSISTANT', content: 'First answer' },
       { role: 'USER', content: 'Second question' },

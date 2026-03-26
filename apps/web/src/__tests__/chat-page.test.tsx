@@ -59,7 +59,7 @@ describe('ChatPage', () => {
     vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({ sessions: [] });
     vi.spyOn(chatService, 'streamChatMessage').mockImplementation(async (_token, _payload, onEvent) => {
       onEvent({
-        type: 'started',
+        type: 'run_started',
         session: {
           id: 'session-1',
           title: 'Hello AI',
@@ -75,10 +75,10 @@ describe('ChatPage', () => {
           createdAt: new Date().toISOString()
         }
       });
-      onEvent({ type: 'delta', delta: 'Hi' });
-      onEvent({ type: 'delta', delta: ' there' });
+      onEvent({ type: 'text_delta', delta: 'Hi' });
+      onEvent({ type: 'text_delta', delta: ' there' });
       onEvent({
-        type: 'completed',
+        type: 'run_completed',
         session: {
           id: 'session-1',
           title: 'Hello AI',

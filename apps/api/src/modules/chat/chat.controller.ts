@@ -3,7 +3,7 @@ import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ChatService } from './chat.service';
-import { RunService } from '../run/run.service';
+import { AgentService } from '../agent/agent.service';
 import { CreateChatMessageDto } from './dto/create-chat-message.dto';
 import type { CurrentUser as CurrentUserPayload } from './chat.types';
 
@@ -12,7 +12,7 @@ import type { CurrentUser as CurrentUserPayload } from './chat.types';
 export class ChatController {
   constructor(
     private readonly chatService: ChatService,
-    private readonly runService: RunService
+    private readonly agentService: AgentService
   ) {}
 
   @Get('sessions')
@@ -51,21 +51,24 @@ export class ChatController {
 
     res.write(
       `event: message\ndata: ${JSON.stringify({
-        type: 'started',
+        type: 'run_started',
         session: this.chatService.formatSessionSummary(session),
         userMessage: this.chatService.formatMessage(userMessage)
       })}\n\n`
     );
 
     const historyResult = await this.chatService.listMessages(user.userId, session.id);
-    const history = historyResult.messages.slice(0, -1);
+    const history = historyResult.messages.slice(0, -1).map((message) => ({
+      role: message.role,
+      content: message.content
+    }));
     let assistantText = '';
 
     try {
-      for await (const event of this.runService.streamReply({ history, prompt: content })) {
-        if (event.type === 'delta') {
-          assistantText += event.text;
-          res.write(`event: message\ndata: ${JSON.stringify({ type: 'delta', delta: event.text })}\n\n`);
+      for await (const event of this.agentService.streamChatReply({ history, prompt: content })) {
+        if (event.type === 'text_delta') {
+          assistantText += event.delta;
+          res.write(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
         }
       }
 
@@ -73,14 +76,14 @@ export class ChatController {
       const refreshedSession = await this.chatService.getSessionOrThrow(user.userId, session.id);
       res.write(
         `event: message\ndata: ${JSON.stringify({
-          type: 'completed',
+          type: 'run_completed',
           session: this.chatService.formatSessionSummary(refreshedSession),
           message: this.chatService.formatMessage(assistantMessage)
         })}\n\n`
       );
       res.end();
     } catch {
-      res.write(`event: message\ndata: ${JSON.stringify({ type: 'error', message: 'Chat stream failed' })}\n\n`);
+      res.write(`event: message\ndata: ${JSON.stringify({ type: 'run_failed', message: 'Chat stream failed' })}\n\n`);
       res.end();
     }
   }
