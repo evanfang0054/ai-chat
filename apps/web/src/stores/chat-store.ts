@@ -13,10 +13,10 @@ type ChatState = {
   setCurrentSession: (sessionId: string | null) => void;
   setMessages: (messages: ChatMessage[]) => void;
   setDraft: (draft: string) => void;
-  applyStreamStarted: (session: ChatSessionSummary, userMessage: ChatMessage) => void;
-  applyStreamDelta: (delta: string) => void;
-  applyStreamCompleted: (session: ChatSessionSummary, message: ChatMessage) => void;
-  applyStreamError: (message: string) => void;
+  applyRunStarted: (session: ChatSessionSummary, userMessage: ChatMessage) => void;
+  applyTextDelta: (delta: string) => void;
+  applyRunCompleted: (session: ChatSessionSummary, message: ChatMessage) => void;
+  applyRunFailed: (message: string) => void;
 };
 
 const STREAMING_MESSAGE_ID = '__streaming__';
@@ -45,7 +45,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setCurrentSession: (currentSessionId) => set({ currentSessionId, messages: [], error: null }),
   setMessages: (messages) => set({ messages }),
   setDraft: (draft) => set({ draft }),
-  applyStreamStarted: (session, userMessage) =>
+  applyRunStarted: (session, userMessage) =>
     set((state) => ({
       currentSessionId: session.id,
       sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
@@ -54,7 +54,7 @@ export const useChatStore = create<ChatState>((set) => ({
       error: null,
       draft: ''
     })),
-  applyStreamDelta: (delta) =>
+  applyTextDelta: (delta) =>
     set((state) => ({
       messages: state.messages.some((message) => message.id === STREAMING_MESSAGE_ID)
         ? state.messages.map((message) =>
@@ -62,13 +62,13 @@ export const useChatStore = create<ChatState>((set) => ({
           )
         : state.messages
     })),
-  applyStreamCompleted: (session, message) =>
+  applyRunCompleted: (session, message) =>
     set((state) => ({
       sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
       messages: state.messages.map((item) => (item.id === STREAMING_MESSAGE_ID ? message : item)),
       isStreaming: false
     })),
-  applyStreamError: (message) =>
+  applyRunFailed: (message) =>
     set((state) => ({
       messages: state.messages.filter((item) => item.id !== STREAMING_MESSAGE_ID),
       isStreaming: false,

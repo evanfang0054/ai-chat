@@ -6,51 +6,48 @@ afterEach(() => {
 });
 
 describe('chat-store', () => {
-  it('applies started delta and completed events to current session', () => {
+  it('applies run events to current session', () => {
     const store = useChatStore.getState();
     const now = new Date().toISOString();
+    const session = {
+      id: 'session-1',
+      title: 'Hello',
+      model: 'deepseek-chat',
+      createdAt: now,
+      updatedAt: now
+    };
+    const userMessage = {
+      id: 'msg-user',
+      sessionId: 'session-1',
+      role: 'USER' as const,
+      content: 'Hello',
+      createdAt: now
+    };
+    const assistantMessage = {
+      id: 'msg-assistant',
+      sessionId: 'session-1',
+      role: 'ASSISTANT' as const,
+      content: 'Hi there',
+      createdAt: now
+    };
 
-    store.applyStreamStarted(
-      {
-        id: 'session-1',
-        title: 'Hello',
-        model: 'deepseek-chat',
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: 'msg-user',
-        sessionId: 'session-1',
-        role: 'USER',
-        content: 'Hello',
-        createdAt: now
-      }
-    );
+    store.applyRunStarted(session, userMessage);
+    expect(useChatStore.getState().isStreaming).toBe(true);
 
-    store.applyStreamDelta('Hi');
-    store.applyStreamDelta(' there');
+    store.applyTextDelta('Hello');
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe('Hello');
 
-    store.applyStreamCompleted(
-      {
-        id: 'session-1',
-        title: 'Hello',
-        model: 'deepseek-chat',
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: 'msg-assistant',
-        sessionId: 'session-1',
-        role: 'ASSISTANT',
-        content: 'Hi there',
-        createdAt: now
-      }
-    );
+    store.applyTextDelta(' there');
+    store.applyRunCompleted(session, assistantMessage);
 
     const state = useChatStore.getState();
     expect(state.currentSessionId).toBe('session-1');
     expect(state.messages).toHaveLength(2);
     expect(state.messages[1].content).toBe('Hi there');
     expect(state.isStreaming).toBe(false);
+
+    store.applyRunStarted(session, userMessage);
+    store.applyRunFailed('Chat stream failed');
+    expect(useChatStore.getState().error).toBe('Chat stream failed');
   });
 });

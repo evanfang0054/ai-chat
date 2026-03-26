@@ -19,10 +19,10 @@ export function ChatPage() {
     setCurrentSession,
     setMessages,
     setDraft,
-    applyStreamStarted,
-    applyStreamDelta,
-    applyStreamCompleted,
-    applyStreamError
+    applyRunStarted,
+    applyTextDelta,
+    applyRunCompleted,
+    applyRunFailed
   } = useChatStore();
 
   useEffect(() => {
@@ -61,28 +61,28 @@ export function ChatPage() {
           sessionId: currentSessionId ?? undefined
         },
         (event) => {
-          if (event.type === 'started') {
-            applyStreamStarted(event.session, event.userMessage);
+          if (event.type === 'run_started') {
+            applyRunStarted(event.session, event.userMessage);
             return;
           }
 
-          if (event.type === 'delta') {
-            applyStreamDelta(event.delta);
+          if (event.type === 'text_delta') {
+            applyTextDelta(event.delta);
             return;
           }
 
-          if (event.type === 'completed') {
-            applyStreamCompleted(event.session, event.message);
+          if (event.type === 'run_completed') {
+            applyRunCompleted(event.session, event.message);
             return;
           }
 
-          if (event.type === 'error') {
-            applyStreamError(event.message);
+          if (event.type === 'run_failed') {
+            applyRunFailed(event.message);
           }
         }
       );
     } catch {
-      applyStreamError('发送失败，请稍后重试。');
+      applyRunFailed('发送失败，请稍后重试。');
     }
   }
 

@@ -30,30 +30,30 @@ export interface SendChatMessageRequest {
   content: string;
 }
 
-export interface ChatStreamStartedEvent {
-  type: 'started';
+export interface ChatRunStartedEvent {
+  type: 'run_started';
   session: ChatSessionSummary;
   userMessage: ChatMessage;
 }
 
-export interface ChatStreamDeltaEvent {
-  type: 'delta';
+export interface ChatTextDeltaEvent {
+  type: 'text_delta';
   delta: string;
 }
 
-export interface ChatStreamCompletedEvent {
-  type: 'completed';
+export interface ChatRunCompletedEvent {
+  type: 'run_completed';
   session: ChatSessionSummary;
   message: ChatMessage;
 }
 
-export interface ChatStreamErrorEvent {
-  type: 'error';
+export interface ChatRunFailedEvent {
+  type: 'run_failed';
   message: string;
 }
 
 export type ChatStreamEvent =
-  | ChatStreamStartedEvent
-  | ChatStreamDeltaEvent
-  | ChatStreamCompletedEvent
-  | ChatStreamErrorEvent;
+  | ChatRunStartedEvent
+  | ChatTextDeltaEvent
+  | ChatRunCompletedEvent
+  | ChatRunFailedEvent;
