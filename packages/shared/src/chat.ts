@@ -1,3 +1,9 @@
+import type {
+  ToolExecutionFailedSummary,
+  ToolExecutionRunningSummary,
+  ToolExecutionSucceededSummary,
+} from './tool';
+
 export type ChatMessageRole = 'USER' | 'ASSISTANT' | 'SYSTEM';
 
 export interface ChatSessionSummary {
@@ -36,6 +42,21 @@ export interface ChatRunStartedEvent {
   userMessage: ChatMessage;
 }
 
+export interface ChatToolStartedEvent {
+  type: 'tool_started';
+  toolExecution: ToolExecutionRunningSummary;
+}
+
+export interface ChatToolCompletedEvent {
+  type: 'tool_completed';
+  toolExecution: ToolExecutionSucceededSummary;
+}
+
+export interface ChatToolFailedEvent {
+  type: 'tool_failed';
+  toolExecution: ToolExecutionFailedSummary;
+}
+
 export interface ChatTextDeltaEvent {
   type: 'text_delta';
   delta: string;
@@ -54,6 +75,9 @@ export interface ChatRunFailedEvent {
 
 export type ChatStreamEvent =
   | ChatRunStartedEvent
+  | ChatToolStartedEvent
+  | ChatToolCompletedEvent
+  | ChatToolFailedEvent
   | ChatTextDeltaEvent
   | ChatRunCompletedEvent
   | ChatRunFailedEvent;

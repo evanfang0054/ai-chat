@@ -1,11 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
+import type {
+  ToolExecutionFailedSummary,
+  ToolExecutionRunningSummary,
+  ToolExecutionSucceededSummary,
+  ToolName
+} from '@ai-chat/shared';
 import { LlmService } from '../llm/llm.service';
+import { ToolService } from '../tool/tool.service';
 import type { AgentHistoryMessage, AgentStreamEvent, StreamChatReplyInput } from './agent.types';
+
+class AgentToolExecutionFailedError extends Error {
+  constructor(public readonly execution: ToolExecutionFailedSummary) {
+    super(execution.errorMessage);
+  }
+}
 
 @Injectable()
 export class AgentService {
-  constructor(private readonly llmService: LlmService) {}
+  constructor(
+    private readonly llmService: LlmService,
+    private readonly toolService: ToolService
+  ) {}
 
   async *streamChatReply(input: StreamChatReplyInput): AsyncGenerator<AgentStreamEvent> {
     const model = this.llmService.createChatModel();
@@ -14,15 +30,232 @@ export class AgentService {
       new HumanMessage(input.prompt)
     ];
 
-    const stream = await model.stream(messages);
-    for await (const chunk of stream) {
-      const text = this.readChunkText(chunk.content);
-      if (text) {
-        yield { type: 'text_delta', delta: text };
+    const toolAwareModel = model.bindTools(this.createLangChainTools() as never, {
+      tool_choice: 'auto'
+    });
+    const response = await toolAwareModel.invoke(messages);
+    let hasOutput = false;
+
+    const toolCalls = this.readToolCalls(response);
+    if (toolCalls.length > 0) {
+      for (const toolCall of toolCalls) {
+        for await (const event of this.runToolCall(toolCall.name, this.readToolCallInput(toolCall.args), input)) {
+          if (event.type === 'text_delta' && event.delta) {
+            hasOutput = true;
+          }
+          yield event;
+        }
       }
     }
 
+    const text = this.readChunkText(response.content);
+    if (text) {
+      hasOutput = true;
+      yield { type: 'text_delta', delta: text };
+    }
+
+    if (!hasOutput) {
+      throw new Error('Agent response was empty');
+    }
+
     yield { type: 'run_completed' };
+  }
+
+  private createLangChainTools() {
+    return this.toolService.listDefinitions().map((definition) => ({
+      name: definition.name,
+      description: definition.description,
+      schema: this.toolService.getDefinition(definition.name)?.schema
+    }));
+  }
+
+  private async *runToolCall(
+    name: string,
+    toolInput: Record<string, unknown>,
+    context: StreamChatReplyInput
+  ): AsyncGenerator<AgentStreamEvent> {
+    const started = await this.toolService.startToolExecution(name, toolInput, {
+      sessionId: context.sessionId,
+      userId: context.userId
+    });
+
+    yield { type: 'tool_started', toolExecution: this.toRunningExecutionSummary(started.execution) };
+
+    try {
+      const result = await started.run();
+      yield {
+        type: 'tool_completed',
+        toolExecution: this.toSucceededExecutionSummary(result.execution)
+      };
+
+      const response = this.buildToolResponseText(result.outputText);
+      if (response) {
+        yield { type: 'text_delta', delta: response };
+      }
+    } catch (error) {
+      const execution = this.readExecutionFromError(error);
+      if (!execution) {
+        throw error;
+      }
+
+      const failedSummary = this.toFailedExecutionSummary(execution);
+      yield {
+        type: 'tool_failed',
+        toolExecution: failedSummary
+      };
+      throw new AgentToolExecutionFailedError(failedSummary);
+    }
+  }
+
+  private readToolCalls(response: { tool_calls?: unknown }) {
+    if (Array.isArray(response.tool_calls)) {
+      return response.tool_calls.filter(
+        (toolCall): toolCall is { name: string; args: unknown } =>
+          typeof toolCall === 'object' && toolCall !== null && typeof toolCall.name === 'string'
+      );
+    }
+
+    return [];
+  }
+
+  private readToolCallInput(args: unknown) {
+    if (typeof args === 'object' && args !== null) {
+      return args as Record<string, unknown>;
+    }
+
+    return {};
+  }
+
+  private toRunningExecutionSummary(execution: {
+    id: string;
+    sessionId: string;
+    toolName: string;
+    status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+    input: unknown;
+    output: unknown;
+    errorMessage: string | null;
+    startedAt: Date | string;
+    finishedAt: Date | string | null;
+  }): ToolExecutionRunningSummary {
+    return {
+      id: execution.id,
+      sessionId: execution.sessionId,
+      toolName: execution.toolName as ToolName,
+      status: 'RUNNING',
+      input: this.toNullableJsonString(execution.input),
+      output: null,
+      errorMessage: null,
+      startedAt: this.toIsoString(execution.startedAt),
+      finishedAt: null
+    };
+  }
+
+  private toSucceededExecutionSummary(execution: {
+    id: string;
+    sessionId: string;
+    toolName: string;
+    status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+    input: unknown;
+    output: unknown;
+    errorMessage: string | null;
+    startedAt: Date | string;
+    finishedAt: Date | string | null;
+  }): ToolExecutionSucceededSummary {
+    const finishedAt = execution.finishedAt;
+    if (finishedAt === null) {
+      throw new Error('Succeeded tool execution is missing finishedAt');
+    }
+
+    return {
+      id: execution.id,
+      sessionId: execution.sessionId,
+      toolName: execution.toolName as ToolName,
+      status: 'SUCCEEDED',
+      input: this.toNullableJsonString(execution.input),
+      output: this.toNullableJsonString(execution.output),
+      errorMessage: null,
+      startedAt: this.toIsoString(execution.startedAt),
+      finishedAt: this.toIsoString(finishedAt)
+    };
+  }
+
+  private toFailedExecutionSummary(execution: {
+    id: string;
+    sessionId: string;
+    toolName: string;
+    status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+    input: unknown;
+    output: unknown;
+    errorMessage: string | null;
+    startedAt: Date | string;
+    finishedAt: Date | string | null;
+  }): ToolExecutionFailedSummary {
+    const finishedAt = execution.finishedAt;
+    if (finishedAt === null) {
+      throw new Error('Failed tool execution is missing finishedAt');
+    }
+
+    return {
+      id: execution.id,
+      sessionId: execution.sessionId,
+      toolName: execution.toolName as ToolName,
+      status: 'FAILED',
+      input: this.toNullableJsonString(execution.input),
+      output: this.toNullableJsonString(execution.output),
+      errorMessage: execution.errorMessage ?? 'Tool execution failed',
+      startedAt: this.toIsoString(execution.startedAt),
+      finishedAt: this.toIsoString(finishedAt)
+    };
+  }
+
+  private readExecutionFromError(error: unknown) {
+    if (typeof error === 'object' && error !== null && 'execution' in error) {
+      return (error as {
+        execution: {
+          id: string;
+          sessionId: string;
+          toolName: string;
+          status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+          input: unknown;
+          output: unknown;
+          errorMessage: string | null;
+          startedAt: Date | string;
+          finishedAt: Date | string | null;
+        };
+      }).execution;
+    }
+
+    return null;
+  }
+
+  private buildToolResponseText(outputText: string | null) {
+    if (!outputText) {
+      return '';
+    }
+
+    try {
+      const parsed = JSON.parse(outputText) as { now?: string; time?: string };
+      const currentTime = parsed.now ?? parsed.time;
+      if (currentTime) {
+        return `The current UTC time is ${currentTime}.`;
+      }
+    } catch {
+      return outputText;
+    }
+
+    return outputText;
+  }
+
+  private toIsoString(value: Date | string) {
+    return value instanceof Date ? value.toISOString() : value;
+  }
+
+  private toNullableJsonString(value: unknown) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    return typeof value === 'string' ? value : JSON.stringify(value);
   }
 
   private toLangChainMessage(message: AgentHistoryMessage) {

@@ -2,7 +2,7 @@ import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 
-const createStream = async function* (...events: Array<{ type: string; delta?: string }>) {
+const createStream = async function* (...events: Array<Record<string, unknown>>) {
   for (const event of events) {
     yield event;
   }
@@ -17,29 +17,34 @@ describe('ChatController (e2e)', () => {
   };
 
   beforeAll(async () => {
-    process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ai_chat';
-    process.env.REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-    process.env.JWT_SECRET = process.env.JWT_SECRET || 'change-me';
-    process.env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || 'test-key';
-    process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
-    process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+    try {
+      process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ai_chat';
+      process.env.REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+      process.env.JWT_SECRET = process.env.JWT_SECRET || 'change-me';
+      process.env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || 'test-key';
+      process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+      process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
-    const { AppModule } = await import('../src/app.module');
-    const { AgentService } = await import('../src/modules/agent/agent.service');
+      const { AppModule } = await import('../src/app.module');
+      const { AgentService } = await import('../src/modules/agent/agent.service');
 
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule]
-    })
-      .overrideProvider(AgentService)
-      .useValue(agentService)
-      .compile();
+      const moduleRef = await Test.createTestingModule({
+        imports: [AppModule]
+      })
+        .overrideProvider(AgentService)
+        .useValue(agentService)
+        .compile();
 
-    app = moduleRef.createNestApplication();
-    await app.init();
-    prisma = app.get((await import('../src/common/prisma/prisma.service')).PrismaService);
-    await prisma.chatMessage.deleteMany();
-    await prisma.chatSession.deleteMany();
-    await prisma.user.deleteMany();
+      app = moduleRef.createNestApplication();
+      await app.init();
+      prisma = app.get((await import('../src/common/prisma/prisma.service')).PrismaService);
+      await prisma.chatMessage.deleteMany();
+      await prisma.chatSession.deleteMany();
+      await prisma.user.deleteMany();
+    } catch (error) {
+      console.error('CHAT_E2E_BEFORE_ALL_ERROR', error);
+      throw error;
+    }
   });
 
   beforeEach(async () => {
@@ -54,7 +59,9 @@ describe('ChatController (e2e)', () => {
     if (app) {
       await app.close();
     }
-    await prisma.$disconnect();
+    if (prisma) {
+      await prisma.$disconnect();
+    }
   });
 
   it('GET /chat/sessions returns only current user sessions', async () => {
@@ -182,9 +189,37 @@ describe('ChatController (e2e)', () => {
       .expect(400);
   });
 
-  it('POST /chat/stream creates a session, streams assistant output, and saves messages', async () => {
+  it('POST /chat/stream creates a session, streams tool and assistant output, and saves messages', async () => {
     agentService.streamChatReply.mockImplementation(() =>
       createStream(
+        {
+          type: 'tool_started',
+          toolExecution: {
+            id: 'tool-execution-1',
+            sessionId: 'pending-session-id',
+            toolName: 'get_current_time',
+            status: 'RUNNING',
+            input: '{"timezone":"UTC"}',
+            output: null,
+            errorMessage: null,
+            startedAt: '2026-03-26T12:00:00.000Z',
+            finishedAt: null
+          }
+        },
+        {
+          type: 'tool_completed',
+          toolExecution: {
+            id: 'tool-execution-1',
+            sessionId: 'pending-session-id',
+            toolName: 'get_current_time',
+            status: 'SUCCEEDED',
+            input: '{"timezone":"UTC"}',
+            output: '{"now":"2026-03-26T12:00:00.000Z"}',
+            errorMessage: null,
+            startedAt: '2026-03-26T12:00:00.000Z',
+            finishedAt: '2026-03-26T12:00:01.000Z'
+          }
+        },
         { type: 'text_delta', delta: 'Hello' },
         { type: 'text_delta', delta: ' world' },
         { type: 'run_completed' }
@@ -212,7 +247,7 @@ describe('ChatController (e2e)', () => {
       .filter((line): line is string => Boolean(line))
       .map((line) => JSON.parse(line.slice(6)));
 
-    expect(payloads).toHaveLength(4);
+    expect(payloads).toHaveLength(6);
     expect(payloads[0]).toMatchObject({
       type: 'run_started',
       session: {
@@ -224,9 +259,33 @@ describe('ChatController (e2e)', () => {
         content: 'Tell me something nice'
       }
     });
-    expect(payloads[1]).toEqual({ type: 'text_delta', delta: 'Hello' });
-    expect(payloads[2]).toEqual({ type: 'text_delta', delta: ' world' });
-    expect(payloads[3]).toMatchObject({
+    expect(payloads[1]).toMatchObject({
+      type: 'tool_started',
+      toolExecution: {
+        id: 'tool-execution-1',
+        toolName: 'get_current_time',
+        status: 'RUNNING',
+        input: '{"timezone":"UTC"}',
+        output: null,
+        errorMessage: null,
+        finishedAt: null
+      }
+    });
+    expect(payloads[2]).toMatchObject({
+      type: 'tool_completed',
+      toolExecution: {
+        id: 'tool-execution-1',
+        toolName: 'get_current_time',
+        status: 'SUCCEEDED',
+        input: '{"timezone":"UTC"}',
+        output: '{"now":"2026-03-26T12:00:00.000Z"}',
+        errorMessage: null,
+        finishedAt: '2026-03-26T12:00:01.000Z'
+      }
+    });
+    expect(payloads[3]).toEqual({ type: 'text_delta', delta: 'Hello' });
+    expect(payloads[4]).toEqual({ type: 'text_delta', delta: ' world' });
+    expect(payloads[5]).toMatchObject({
       type: 'run_completed',
       session: {
         id: payloads[0].session.id,
@@ -238,7 +297,11 @@ describe('ChatController (e2e)', () => {
       }
     });
 
+    expect(payloads[1].toolExecution.sessionId).toBe(payloads[0].session.id);
+    expect(payloads[2].toolExecution.sessionId).toBe(payloads[0].session.id);
     expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      userId: user.body.user.id,
+      sessionId: payloads[0].session.id,
       history: [],
       prompt: 'Tell me something nice'
     });
@@ -260,9 +323,37 @@ describe('ChatController (e2e)', () => {
     ]);
   });
 
-  it('POST /chat/stream emits error event and does not persist assistant on agent failure', async () => {
+  it('POST /chat/stream emits tool failure before run_failed and does not persist assistant on agent failure', async () => {
     agentService.streamChatReply.mockImplementation(async function* () {
       if (shouldFailAgent) {
+        yield {
+          type: 'tool_started' as const,
+          toolExecution: {
+            id: 'tool-execution-2',
+            sessionId: 'pending-session-id',
+            toolName: 'get_current_time',
+            status: 'RUNNING' as const,
+            input: '{"timezone":"UTC"}',
+            output: null,
+            errorMessage: null,
+            startedAt: '2026-03-26T12:05:00.000Z',
+            finishedAt: null
+          }
+        };
+        yield {
+          type: 'tool_failed' as const,
+          toolExecution: {
+            id: 'tool-execution-2',
+            sessionId: 'pending-session-id',
+            toolName: 'get_current_time',
+            status: 'FAILED' as const,
+            input: '{"timezone":"UTC"}',
+            output: null,
+            errorMessage: 'Tool execution failed',
+            startedAt: '2026-03-26T12:05:00.000Z',
+            finishedAt: '2026-03-26T12:05:01.000Z'
+          }
+        };
         throw new Error('agent failed');
       }
 
@@ -282,7 +373,39 @@ describe('ChatController (e2e)', () => {
       .send({ content: 'Trigger failure' })
       .expect(201);
 
-    expect(response.text).toContain('"type":"run_failed"');
+    const payloads = response.text
+      .trim()
+      .split('\n\n')
+      .map((chunk) => chunk.split('\n').find((line) => line.startsWith('data: ')))
+      .filter((line): line is string => Boolean(line))
+      .map((line) => JSON.parse(line.slice(6)));
+
+    expect(payloads[0]).toMatchObject({
+      type: 'run_started',
+      userMessage: { role: 'USER', content: 'Trigger failure' }
+    });
+    expect(payloads[1]).toMatchObject({
+      type: 'tool_started',
+      toolExecution: {
+        id: 'tool-execution-2',
+        toolName: 'get_current_time',
+        status: 'RUNNING',
+        finishedAt: null
+      }
+    });
+    expect(payloads[2]).toMatchObject({
+      type: 'tool_failed',
+      toolExecution: {
+        id: 'tool-execution-2',
+        toolName: 'get_current_time',
+        status: 'FAILED',
+        errorMessage: 'Tool execution failed',
+        finishedAt: '2026-03-26T12:05:01.000Z'
+      }
+    });
+    expect(payloads[3]).toEqual({ type: 'run_failed', message: 'agent failed' });
+    expect(payloads[1].toolExecution.sessionId).toBe(payloads[0].session.id);
+    expect(payloads[2].toolExecution.sessionId).toBe(payloads[0].session.id);
 
     const session = await prisma.chatSession.findFirstOrThrow({
       where: { userId: user.body.user.id }
@@ -361,6 +484,8 @@ describe('ChatController (e2e)', () => {
     });
 
     expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      userId: user.body.user.id,
+      sessionId: 'existing-session',
       history: [
         { role: 'USER', content: 'First question' },
         { role: 'ASSISTANT', content: 'First answer' }
