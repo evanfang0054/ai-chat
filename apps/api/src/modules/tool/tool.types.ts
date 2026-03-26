@@ -3,8 +3,14 @@ export interface ToolExecutionContext {
   userId: string;
 }
 
-export interface ToolDefinition<Input = unknown, Output = unknown> {
+export interface ToolMetadata {
   name: string;
   description: string;
+}
+
+export type ToolInput = Record<string, unknown>;
+
+export interface ToolDefinition<Input extends ToolInput = ToolInput, Output = unknown>
+  extends ToolMetadata {
   execute: (input: Input, context: ToolExecutionContext) => Promise<Output> | Output;
 }
