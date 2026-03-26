@@ -73,7 +73,7 @@ describe('AgentService', () => {
     expect(events).toEqual([{ type: 'text_delta', delta: 'ok' }, { type: 'run_completed' }]);
   });
 
-  it('emits tool events before final text when a tool is called', async () => {
+  it('emits the tool-success event sequence for a tool-aware agent execution path', async () => {
     const toolStartedExecution = {
       id: 'tool-execution-1',
       sessionId: 'session-1',
@@ -114,8 +114,8 @@ describe('AgentService', () => {
     for await (const event of service.streamChatReply({
       userId: 'user-1',
       sessionId: 'session-1',
-      history: [{ role: 'USER', content: 'What time is it in UTC?' }],
-      prompt: 'Use the current time tool before answering.'
+      history: [{ role: 'USER', content: 'Please continue this tool-assisted run.' }],
+      prompt: 'Continue the tool-assisted run and stream the final reply.'
     })) {
       events.push(event);
     }
@@ -134,7 +134,7 @@ describe('AgentService', () => {
     ]);
   });
 
-  it('emits tool_failed when tool execution throws', async () => {
+  it('emits the tool-failure event sequence for a tool-aware agent execution path', async () => {
     const toolStartedExecution = {
       id: 'tool-execution-2',
       sessionId: 'session-1',
@@ -175,8 +175,8 @@ describe('AgentService', () => {
     for await (const event of service.streamChatReply({
       userId: 'user-1',
       sessionId: 'session-1',
-      history: [{ role: 'USER', content: 'What time is it in UTC?' }],
-      prompt: 'Use the current time tool before answering.'
+      history: [{ role: 'USER', content: 'Please continue this tool-assisted run.' }],
+      prompt: 'Continue the tool-assisted run and stream the final reply.'
     })) {
       events.push(event);
     }
