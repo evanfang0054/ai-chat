@@ -1,0 +1,6 @@
+.worktrees/
+node_modules/
+.pnpm-store/
+.env
+.env.local
+.env.*.local
