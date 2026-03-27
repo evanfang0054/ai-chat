@@ -1,5 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import type { CreateScheduleRequest, ScheduleRunStatus, ScheduleType, UpdateScheduleRequest } from '@ai-chat/shared';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import type {
+  CreateScheduleRequest,
+  DeleteScheduleResponse,
+  ScheduleRunStatus,
+  ScheduleType,
+  UpdateScheduleRequest
+} from '@ai-chat/shared';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -43,6 +49,15 @@ export class ScheduleController {
   @Post('schedules/:id/disable')
   disableSchedule(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
     return this.scheduleService.disableSchedule(user.userId, id);
+  }
+
+  @Delete('schedules/:id')
+  async deleteSchedule(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') id: string
+  ): Promise<DeleteScheduleResponse> {
+    await this.scheduleService.deleteSchedule(user.userId, id);
+    return { deletedScheduleId: id };
   }
 
   @Get('runs')

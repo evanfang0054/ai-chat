@@ -32,9 +32,17 @@ describe('ToolService', () => {
         update
       }
     };
+    const scheduleService = {
+      createSchedule: jest.fn(),
+      listSchedules: jest.fn(),
+      updateSchedule: jest.fn(),
+      deleteSchedule: jest.fn(),
+      enableSchedule: jest.fn(),
+      disableSchedule: jest.fn()
+    };
 
     const { ToolService } = await import('./tool.service');
-    const service = new ToolService(prisma as never);
+    const service = new ToolService(prisma as never, scheduleService as never);
     const started = await service.startToolExecution('get_current_time', { timezone: 'UTC' }, {
       sessionId: 'session-1',
       userId: 'user-1'
@@ -87,9 +95,17 @@ describe('ToolService', () => {
         update
       }
     };
+    const scheduleService = {
+      createSchedule: jest.fn(),
+      listSchedules: jest.fn(),
+      updateSchedule: jest.fn(),
+      deleteSchedule: jest.fn(),
+      enableSchedule: jest.fn(),
+      disableSchedule: jest.fn()
+    };
 
     const { ToolService } = await import('./tool.service');
-    const service = new ToolService(prisma as never);
+    const service = new ToolService(prisma as never, scheduleService as never);
 
     const originalNow = Date.now;
     Date.now = jest.fn().mockReturnValue(new Date('2026-03-26T12:05:00.000Z').valueOf());
@@ -125,5 +141,29 @@ describe('ToolService', () => {
 
     service.getDefinition('get_current_time')!.execute = originalExecute!;
     Date.now = originalNow;
+  });
+
+  it('registers manage_schedule tool and can list it', async () => {
+    const prisma = {
+      toolExecution: {
+        create: jest.fn(),
+        update: jest.fn()
+      }
+    };
+    const scheduleService = {
+      createSchedule: jest.fn(),
+      listSchedules: jest.fn(),
+      updateSchedule: jest.fn(),
+      deleteSchedule: jest.fn(),
+      enableSchedule: jest.fn(),
+      disableSchedule: jest.fn()
+    };
+
+    const { ToolService } = await import('./tool.service');
+    const service = new ToolService(prisma as never, scheduleService as never);
+
+    const definitions = service.listDefinitions();
+    expect(definitions.map((d) => d.name)).toContain('manage_schedule');
+    expect(service.getDefinition('manage_schedule')).not.toBeNull();
   });
 });

@@ -157,6 +157,7 @@ export function ScheduleList(props: {
   schedules: ScheduleSummary[];
   onToggle: (schedule: ScheduleSummary) => Promise<void>;
   onEdit: (schedule: ScheduleSummary) => void;
+  onDelete: (schedule: ScheduleSummary) => Promise<void>;
 }) {
   return (
     <section>
@@ -177,6 +178,7 @@ export function ScheduleList(props: {
               <button onClick={() => props.onToggle(schedule)}>
                 {schedule.enabled ? 'Disable' : 'Enable'}
               </button>
+              <button onClick={() => props.onDelete(schedule)}>Delete</button>
             </li>
           ))}
         </ul>

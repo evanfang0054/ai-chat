@@ -148,6 +148,73 @@ describe('AgentService', () => {
     ]);
   });
 
+  it('summarizes manage_schedule list results as text', async () => {
+    const toolStartedExecution = {
+      id: 'tool-execution-2',
+      sessionId: 'session-1',
+      toolName: 'manage_schedule',
+      status: 'RUNNING' as const,
+      input: '{"action":"list","enabled":true}',
+      output: null,
+      errorMessage: null,
+      startedAt: '2026-03-27T12:00:00.000Z',
+      finishedAt: null
+    };
+    const toolCompletedExecution = {
+      ...toolStartedExecution,
+      status: 'SUCCEEDED' as const,
+      output:
+        '{"schedules":[{"id":"schedule-1","title":"Daily summary","taskPrompt":"Summarize inbox","type":"CRON","cronExpr":"0 9 * * *","runAt":null,"timezone":"UTC","enabled":true,"lastRunAt":null,"nextRunAt":"2026-03-28T09:00:00.000Z","createdAt":"2026-03-27T11:00:00.000Z","updatedAt":"2026-03-27T11:00:00.000Z"}]}',
+      finishedAt: '2026-03-27T12:00:01.000Z'
+    };
+    const invoke = jest.fn().mockResolvedValue({
+      content: '',
+      tool_calls: [{ name: 'manage_schedule', args: { action: 'list', enabled: true } }]
+    });
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const run = jest.fn().mockResolvedValue({
+      execution: toolCompletedExecution,
+      outputText: toolCompletedExecution.output
+    });
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([
+        { name: 'manage_schedule', description: 'Manage the current user\'s schedules.' }
+      ]),
+      getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
+      startToolExecution: jest.fn().mockResolvedValue({
+        execution: toolStartedExecution,
+        run
+      })
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+    const events: AgentStreamEvent[] = [];
+
+    for await (const event of service.streamChatReply({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [{ role: 'USER', content: 'Show my schedules' }],
+      prompt: 'List enabled schedules'
+    })) {
+      events.push(event);
+    }
+
+    expect(toolService.startToolExecution).toHaveBeenCalledWith('manage_schedule', { action: 'list', enabled: true }, {
+      sessionId: 'session-1',
+      userId: 'user-1'
+    });
+    expect(events).toEqual([
+      { type: 'tool_started', toolExecution: toolStartedExecution },
+      { type: 'tool_completed', toolExecution: toolCompletedExecution },
+      { type: 'text_delta', delta: 'Found 1 schedules.' },
+      { type: 'run_completed' }
+    ]);
+  });
+
   it('emits the tool-failure event sequence for a LangChain tool call', async () => {
     const toolStartedExecution = {
       id: 'tool-execution-1',

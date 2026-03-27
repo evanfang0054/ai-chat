@@ -130,6 +130,10 @@ export interface ListSchedulesResponse {
   schedules: ScheduleSummary[];
 }
 
+export interface DeleteScheduleResponse {
+  deletedScheduleId: string;
+}
+
 export interface ListScheduleRunsResponse {
   runs: ScheduleRunSummary[];
 }

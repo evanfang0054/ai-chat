@@ -23,7 +23,7 @@ describe('SchedulesPage', () => {
     expect(await screen.findByText(/login/i)).toBeInTheDocument();
   });
 
-  it('loads schedules, creates a one-time schedule, and edits an existing schedule', async () => {
+  it('loads schedules, creates a one-time schedule, edits an existing schedule, and deletes it', async () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token-123',
       user: {
@@ -84,6 +84,10 @@ describe('SchedulesPage', () => {
       updatedAt: new Date().toISOString()
     });
 
+    const deleteSchedule = vi.spyOn(scheduleService, 'deleteSchedule').mockResolvedValue({
+      deletedScheduleId: 'schedule-1'
+    });
+
     await router.navigate('/schedules');
     render(<RouterProvider router={router} />);
 
@@ -133,5 +137,11 @@ describe('SchedulesPage', () => {
       })
     );
     expect(await screen.findByText('Existing schedule updated')).toBeInTheDocument();
+
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete' });
+    await userEvent.click(deleteButtons[1]);
+
+    expect(deleteSchedule).toHaveBeenCalledWith('token-123', 'schedule-1');
+    expect(screen.queryByText('Existing schedule updated')).not.toBeInTheDocument();
   });
 });

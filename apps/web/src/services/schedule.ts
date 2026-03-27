@@ -51,6 +51,13 @@ export function disableSchedule(accessToken: string, id: string) {
   });
 }
 
+export function deleteSchedule(accessToken: string, id: string) {
+  return apiFetch<{ deletedScheduleId: string }>(`/schedules/${id}`, {
+    method: 'DELETE',
+    accessToken
+  });
+}
+
 export function listRuns(accessToken: string, filters?: { scheduleId?: string; status?: string }) {
   const params = new URLSearchParams();
   if (filters?.scheduleId) {

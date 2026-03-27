@@ -234,10 +234,30 @@ export class AgentService {
     }
 
     try {
-      const parsed = JSON.parse(outputText) as { now?: string; time?: string };
+      const parsed = JSON.parse(outputText) as {
+        now?: string;
+        time?: string;
+        deletedScheduleId?: string;
+        schedules?: Array<{ title?: string; type?: string; enabled?: boolean }>;
+        title?: string;
+        type?: string;
+        enabled?: boolean;
+      };
       const currentTime = parsed.now ?? parsed.time;
       if (currentTime) {
         return `The current UTC time is ${currentTime}.`;
+      }
+      if (parsed.deletedScheduleId) {
+        return `Deleted schedule ${parsed.deletedScheduleId}.`;
+      }
+      if (Array.isArray(parsed.schedules)) {
+        if (parsed.schedules.length === 0) {
+          return 'No schedules found.';
+        }
+        return `Found ${parsed.schedules.length} schedules.`;
+      }
+      if (typeof parsed.title === 'string' && typeof parsed.type === 'string') {
+        return `Schedule "${parsed.title}" (${parsed.type}) is now ${parsed.enabled ? 'enabled' : 'saved'}.`;
       }
     } catch {
       return outputText;

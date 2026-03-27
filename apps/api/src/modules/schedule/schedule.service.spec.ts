@@ -690,6 +690,47 @@ describe('ScheduleService', () => {
     expect(result.nextRunAt).toBeNull();
   });
 
+  it('deleteSchedule removes an owned schedule', async () => {
+    const existing = createScheduleRecord({
+      id: 'schedule-5'
+    });
+    const findFirst = jest.fn().mockResolvedValue(existing);
+    const deleteSchedule = jest.fn().mockResolvedValue(existing);
+    const prisma = {
+      schedule: {
+        findFirst,
+        delete: deleteSchedule
+      }
+    };
+
+    const service = new ScheduleService(prisma as never);
+
+    await service.deleteSchedule(userId, existing.id);
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: existing.id, userId }
+    });
+    expect(deleteSchedule).toHaveBeenCalledWith({
+      where: { id: existing.id }
+    });
+  });
+
+  it('deleteSchedule throws NotFoundException for missing schedule', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const deleteSchedule = jest.fn();
+    const prisma = {
+      schedule: {
+        findFirst,
+        delete: deleteSchedule
+      }
+    };
+
+    const service = new ScheduleService(prisma as never);
+
+    await expect(service.deleteSchedule(userId, 'missing-schedule')).rejects.toBeInstanceOf(NotFoundException);
+    expect(deleteSchedule).not.toHaveBeenCalled();
+  });
+
   it('listRuns returns owner-filtered runs', async () => {
     const run = createRunRecord();
     const findMany = jest.fn().mockResolvedValue([run]);

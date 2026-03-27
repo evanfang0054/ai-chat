@@ -105,6 +105,7 @@ describe('ScheduleController (e2e)', () => {
     await request(app.getHttpServer()).post('/schedules').send({}).expect(401);
     await request(app.getHttpServer()).get('/schedules').expect(401);
     await request(app.getHttpServer()).patch('/schedules/any-id').send({ title: 'Nope' }).expect(401);
+    await request(app.getHttpServer()).delete('/schedules/any-id').expect(401);
     await request(app.getHttpServer()).post('/schedules/any-id/enable').expect(401);
     await request(app.getHttpServer()).post('/schedules/any-id/disable').expect(401);
     await request(app.getHttpServer()).get('/runs').expect(401);
@@ -242,6 +243,46 @@ describe('ScheduleController (e2e)', () => {
       .set(authHeader(otherUser.accessToken))
       .send({ title: 'Should fail' })
       .expect(404);
+  });
+
+  it('DELETE /schedules/:id deletes owned schedule and rejects another user', async () => {
+    const owner = await registerUser('schedule-delete-owner@example.com');
+    const otherUser = await registerUser('schedule-delete-other@example.com');
+
+    await prisma.schedule.create({
+      data: {
+        id: 'schedule-to-delete',
+        userId: owner.userId,
+        title: 'Delete me',
+        taskPrompt: 'Remove this schedule',
+        type: 'ONE_TIME',
+        cronExpr: null,
+        runAt: new Date('2026-03-28T09:00:00.000Z'),
+        timezone: 'UTC',
+        enabled: true,
+        nextRunAt: new Date('2026-03-28T09:00:00.000Z')
+      }
+    });
+
+    await request(app.getHttpServer())
+      .delete('/schedules/schedule-to-delete')
+      .set(authHeader(otherUser.accessToken))
+      .expect(404);
+
+    const deleted = await request(app.getHttpServer())
+      .delete('/schedules/schedule-to-delete')
+      .set(authHeader(owner.accessToken))
+      .expect(200);
+
+    expect(deleted.body).toEqual({
+      deletedScheduleId: 'schedule-to-delete'
+    });
+
+    const schedule = await prisma.schedule.findUnique({
+      where: { id: 'schedule-to-delete' }
+    });
+
+    expect(schedule).toBeNull();
   });
 
   it('POST /schedules/:id/disable and /enable toggles schedule state and rejects another user', async () => {

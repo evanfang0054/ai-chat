@@ -173,6 +173,13 @@ export class ScheduleService {
     return toScheduleSummary(this.toScheduleSummaryLike(updated));
   }
 
+  async deleteSchedule(userId: string, scheduleId: string) {
+    const schedule = await this.getScheduleOrThrow(userId, scheduleId);
+    await this.prisma.schedule.delete({
+      where: { id: schedule.id }
+    });
+  }
+
   async listRuns(userId: string, filters: ScheduleRunFilters = {}): Promise<ListScheduleRunsResponse> {
     const runs = await this.prisma.scheduleRun.findMany({
       where: {

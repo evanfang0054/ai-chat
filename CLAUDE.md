@@ -7,9 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 这是一个 `pnpm workspace + Turborepo` 的 monorepo，目标是构建 AI 聊天平台。
 
 当前代码已经不只是“auth 骨架”。仓库现状是：
-- `apps/api`：NestJS API，已实现健康检查、用户注册/登录、JWT 鉴权、基础 RBAC、聊天会话/消息查询、`/chat/stream` 流式聊天接口、tool execution 持久化
-- `apps/web`：React + Vite Web，已实现登录页、认证状态持久化、受保护路由、管理员路由、聊天页、会话侧栏、流式消息渲染、工具执行状态展示
-- `packages/shared`：前后端共享 auth / user / chat / tool 类型
+- `apps/api`：NestJS API，已实现健康检查、用户注册/登录、JWT 鉴权、基础 RBAC、聊天会话/消息查询、`/chat/stream` 流式聊天接口、tool execution 持久化、schedule/runs 接口与自动 tick 执行
+- `apps/web`：React + Vite Web，已实现登录页、认证状态持久化、受保护路由、管理员路由、聊天页、会话侧栏、流式消息渲染、工具执行状态展示、Schedules / Runs 页面
+- `packages/shared`：前后端共享 auth / user / chat / tool / schedule 类型
 - `infra/compose.yaml`：本地 PostgreSQL / Redis 依赖
 
 设计与实施文档在：
@@ -17,6 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `docs/superpowers/specs/2026-03-26-ai-chat-design.md`
 - `docs/superpowers/plans/2026-03-26-platform-bootstrap-auth.md`
 - `docs/superpowers/plans/2026-03-26-tool-mvp.md`
+- `docs/superpowers/specs/2026-03-27-schedule-mvp-design.md`
+- `docs/superpowers/plans/2026-03-27-schedule-mvp.md`
 
 ## 常用命令
 
@@ -50,6 +52,8 @@ pnpm --filter @ai-chat/web test
 ```bash
 pnpm --filter @ai-chat/api test -- auth.e2e-spec.ts
 pnpm --filter @ai-chat/api test:e2e -- auth.e2e-spec.ts
+pnpm --filter @ai-chat/api test -- schedule-tick.processor.spec.ts
+pnpm --filter @ai-chat/api test:e2e -- schedule.e2e-spec.ts
 pnpm --filter @ai-chat/web test -- auth-store.test.ts
 pnpm --filter @ai-chat/web test -- chat-store.test.ts
 ```
@@ -70,6 +74,8 @@ pnpm --filter @ai-chat/api db:seed
 - API 默认端口：`3000`
 - Web 默认端口：`5173`
 - 本地基础依赖通过 `infra/compose.yaml` 提供：PostgreSQL 16、Redis 7
+- Web 默认请求 `VITE_API_BASE_URL || http://localhost:3000`
+- API 会按顺序读取 `.env.local`、`.env`、根目录 `.env.local`、根目录 `.env`，且 `override: false`，先读到的值不会被后面的文件覆盖
 
 典型本地启动顺序：
 1. 准备本地环境变量
@@ -83,35 +89,21 @@ pnpm --filter @ai-chat/api db:seed
 如果 `pnpm dev` 时端口已被占用：
 - Web 端 Vite 会自动尝试下一个端口
 - API 默认仍监听 `3000`，联调前先确认是否已有本地服务在占用该端口，不要直接粗暴杀进程
-
-## 仓库结构
-
-```txt
-apps/
-  api/     NestJS 后端
-  web/     React + Vite 前端
-packages/
-  shared/         前后端共享类型
-  tsconfig/       共享 TS 配置
-  eslint-config/  共享 ESLint 配置
-infra/
-  compose.yaml    本地 PostgreSQL / Redis
-docs/superpowers/
-  specs/          设计文档
-  plans/          实施计划文档
-```
+- 如果你为了联调临时再拉起一套 API/Web（例如 `3100` / `5174`），必须同步确认前端实际指向的 API 地址，而不是默认假设还在 `3000`
 
 ## 当前架构要点
 
-### 1. API 已进入 chat + auth 双主线
+### 1. API 是 auth + chat + schedule 三条主线拼起来的
 `apps/api/src/app.module.ts` 当前接入：
 - `PrismaModule`
+- `QueueModule`
 - `UsersModule`
 - `AuthModule`
 - `ChatModule`
+- `ScheduleModule`
 - `HealthController`
 
-因此后端现状不是只有账号体系，还包含聊天链路。新增能力时优先沿现有模块边界扩展，而不是重新搭一层大而全的抽象。
+因此后端现状不是只有账号体系，还包含聊天与定时任务链路。新增能力时优先沿现有模块边界扩展，而不是重新搭一层大而全的抽象。
 
 ### 2. 聊天主链路是 chat -> agent -> llm/tool
 后端的聊天入口在 `apps/api/src/modules/chat/chat.controller.ts`：
@@ -144,7 +136,37 @@ docs/superpowers/
 - shared 类型是否同步更新
 - web store 与聊天页是否正确消费事件
 
-### 4. Web 聊天页的状态中心在 Zustand，不在组件局部 state
+### 4. Schedule 主链路是 DB 真相源，不是 BullMQ 真相源
+Schedule 的核心业务仍在数据库：
+- `ScheduleService` 负责 CRUD、enable / disable、`nextRunAt` 维护
+- `ScheduleRunnerService.processDueSchedules(now)` 负责扫描 due schedules、claim、创建 `ScheduleRun`、调用 chat/agent 执行，并在 one-time 场景下回写 `enabled=false`
+- `QueueModule` 只注册 Redis/BullMQ 连接与全局 `schedule-tick` queue
+- `ScheduleTickBootstrapService` 只负责确保存在唯一 repeatable tick job
+- `ScheduleTickProcessor` 只负责周期性唤醒 `processDueSchedules(new Date())`
+
+不要把 BullMQ 当作每个 schedule 的独立真相源，也不要在 processor 里复制业务调度逻辑。
+
+### 5. 多实例联调时，schedule tick 会共享同一个 Redis 队列
+这是这个仓库里很容易再踩一次的坑：
+- 如果本地同时跑着两套 API（例如 `3000` 和 `3100`），并且两套都连同一个 `REDIS_URL`
+- 且两套都启用了 schedule tick
+- 那么任意实例都可能抢到同一个 schedule 的执行权
+
+实际影响：
+- 你可能在 `3100` 上创建了 schedule，但执行发生在旧的 `3000` 实例里
+- 于是会出现“创建请求打到新环境，但 run 结果像是旧环境配置”的假象，例如错用旧的 LLM key / base URL
+
+联调 schedule / runs / LLM 时，先确认：
+- 当前只有一个 API 实例在消费 tick；或
+- 不同实例至少使用隔离的 Redis / queue 配置
+
+排查顺序优先是：
+1. 确认 Web 实际命中的 API 地址
+2. 确认有哪些 API 端口仍在存活
+3. 确认哪些实例启用了 tick 并连接了同一个 Redis
+4. 再怀疑 `.env`、LLM key、模型配置
+
+### 6. Web 聊天页的状态中心在 Zustand，不在组件局部 state
 前端聊天主页面在 `apps/web/src/pages/chat/ChatPage.tsx`，聊天流状态集中在 `apps/web/src/stores/chat-store.ts`。
 
 关键点：
@@ -158,7 +180,7 @@ docs/superpowers/
 - `apps/web/src/services/chat.ts`
 - `apps/web/src/components/chat/*`
 
-### 5. 认证链路仍是前后端基础设施
+### 7. 认证链路仍是前后端基础设施
 后端认证入口在 `apps/api/src/modules/auth/auth.controller.ts`：
 - `POST /auth/register`
 - `POST /auth/login`
@@ -172,11 +194,13 @@ docs/superpowers/
 - 路由守卫是否仍成立
 - 登录页和后续页面跳转是否受影响
 
-### 6. 路由保护分为登录态与角色两层
+### 8. 路由保护分为登录态与角色两层，schedule/runs 已接入主应用路由
 `apps/web/src/router/index.tsx` 当前结构是：
 - `/login`：登录页
 - `/chat`：登录后默认主入口
 - `/dashboard`：登录态页面
+- `/schedules`：登录态页面
+- `/runs`：登录态页面
 - `/admin`：额外要求 `ADMIN` 角色
 
 权限相关改动通常会同时影响：
@@ -184,16 +208,17 @@ docs/superpowers/
 - 前端 `ProtectedRoute` / `RoleRoute`
 - `packages/shared` 里的角色定义
 
-### 7. shared package 是前后端契约层
+### 9. shared package 是前后端契约层
 `packages/shared/src/index.ts` 当前统一导出：
 - `auth`
 - `user`
 - `chat`
 - `tool`
+- `schedule`
 
-凡是前后端都要消费的 DTO、会话/消息摘要、tool execution 类型，应优先放到 `packages/shared`，避免两端各自维护重复定义。
+凡是前后端都要消费的 DTO、会话/消息摘要、tool execution、schedule / run 类型，应优先放到 `packages/shared`，避免两端各自维护重复定义。
 
-### 8. 文档里的目标边界可以参考，但以当前代码为准
+### 10. 文档里的目标边界可以参考，但以当前代码为准
 设计文档已经明确未来方向，如 `schedule`、`run`、`audit` 等模块。但当前真实运行状态仍以代码实现为准。
 
 回答“现在系统怎么工作”时：以代码为准。
@@ -206,11 +231,13 @@ docs/superpowers/
 - 涉及持久化时优先沿 Prisma 层扩展
 - 聊天联调通常需要先确认数据库已 migrate/seed
 - 如果要验证 tool execution 是否真实成功，优先检查接口流事件和数据库记录，而不只看前端文案
+- 如果要验证 schedule 真正执行在哪个实例上，除了看 `/runs` 页面，还要同时看 API 日志和存活端口
 
 ### Web
 - 当前是纯客户端应用，认证态是客户端持久化状态
 - 新增页面时优先沿现有 `pages/ + router/ + services/ + stores/ + components/` 分层
 - 聊天页空态、流式 assistant 文本、tool execution 展示是三套不同 UI 状态，改动时不要混淆
+- Schedule / Runs 联调时，先确认 `VITE_API_BASE_URL`，不要默认认为页面一定连到 `3000`
 
 ### Monorepo / Turbo
 - 根脚本通过 `turbo run` 驱动各 workspace
@@ -234,6 +261,7 @@ docs/superpowers/
 - 聊天页真实发送消息
 - 流式输出是否渲染正常
 - tool execution 卡片是否正确显示
+- schedule 创建、自动触发、runs 结果验证
 - 页面跳转、受保护路由、管理员路由验证
 
 如果只是本地静态代码修改，不要过早使用浏览器；但到“功能完成后的最终验证”阶段，应优先考虑 `agent-browser`。

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 
 import { QueueModule } from '../../common/queue/queue.module';
 import { AgentModule } from '../agent/agent.module';
@@ -10,8 +10,9 @@ import { ScheduleRunnerService } from './schedule-runner.service';
 import { ScheduleService } from './schedule.service';
 
 @Module({
-  imports: [QueueModule, ChatModule, AgentModule],
+  imports: [QueueModule, forwardRef(() => ChatModule), forwardRef(() => AgentModule)],
   controllers: [ScheduleController],
-  providers: [ScheduleService, ScheduleRunnerService, ScheduleTickProcessor, ScheduleTickBootstrapService]
+  providers: [ScheduleService, ScheduleRunnerService, ScheduleTickProcessor, ScheduleTickBootstrapService],
+  exports: [ScheduleService]
 })
 export class ScheduleModule {}

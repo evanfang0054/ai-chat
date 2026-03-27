@@ -6,6 +6,7 @@ import { AppShell } from '../../components/layout/AppShell';
 import { useAuthStore } from '../../stores/auth-store';
 import {
   createSchedule,
+  deleteSchedule,
   disableSchedule,
   enableSchedule,
   listSchedules,
@@ -61,6 +62,18 @@ export function SchedulesPage() {
     }
   }
 
+  async function handleDelete(schedule: ScheduleSummary) {
+    if (!accessToken) {
+      return;
+    }
+
+    await deleteSchedule(accessToken, schedule.id);
+    setSchedules((current) => current.filter((item) => item.id !== schedule.id));
+    if (editingSchedule?.id === schedule.id) {
+      setEditingSchedule(null);
+    }
+  }
+
   return (
     <AppShell>
       <h1>Schedules</h1>
@@ -72,7 +85,7 @@ export function SchedulesPage() {
           onCancel={() => setEditingSchedule(null)}
         />
       )}
-      <ScheduleList schedules={schedules} onToggle={handleToggle} onEdit={setEditingSchedule} />
+      <ScheduleList schedules={schedules} onToggle={handleToggle} onEdit={setEditingSchedule} onDelete={handleDelete} />
     </AppShell>
   );
 }
