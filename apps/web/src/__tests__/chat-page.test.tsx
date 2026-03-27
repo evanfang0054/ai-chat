@@ -42,6 +42,9 @@ describe('ChatPage', () => {
     render(<RouterProvider router={router} />);
 
     expect(await screen.findByText('开始一个新的对话')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/chat');
+    expect(screen.getByRole('link', { name: 'Schedules' })).toHaveAttribute('href', '/schedules');
+    expect(screen.getByRole('link', { name: 'Runs' })).toHaveAttribute('href', '/runs');
   });
 
   it('shows local user message immediately and streams assistant response', async () => {
@@ -105,6 +108,63 @@ describe('ChatPage', () => {
 
     expect((await screen.findAllByText('Hello AI')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Hi there')).toBeInTheDocument();
+  });
+
+  it('loads messages for requested session from query string', async () => {
+    useAuthStore.getState().setAuth({
+      accessToken: 'token-123',
+      user: {
+        id: 'user-1',
+        email: 'user@example.com',
+        role: 'USER',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString()
+      }
+    });
+
+    vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          title: 'Session One',
+          model: 'deepseek-chat',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        {
+          id: 'session-2',
+          title: 'Session Two',
+          model: 'deepseek-chat',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ]
+    });
+
+    const getChatMessages = vi.spyOn(chatService, 'getChatMessages').mockImplementation(async (_token, sessionId) => ({
+      session: {
+        id: sessionId,
+        title: sessionId === 'session-2' ? 'Session Two' : 'Session One',
+        model: 'deepseek-chat',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      messages: [
+        {
+          id: `msg-${sessionId}`,
+          sessionId,
+          role: 'USER',
+          content: sessionId === 'session-2' ? 'Loaded requested session' : 'Loaded default session',
+          createdAt: new Date().toISOString()
+        }
+      ]
+    }));
+
+    await router.navigate('/chat?sessionId=session-2');
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByText('Loaded requested session')).toBeInTheDocument();
+    expect(getChatMessages).toHaveBeenCalledWith('token-123', 'session-2');
   });
 
   it('loads messages when switching sessions', async () => {

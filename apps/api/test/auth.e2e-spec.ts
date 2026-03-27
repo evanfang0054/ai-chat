@@ -31,6 +31,11 @@ describe('AuthController (e2e)', () => {
     await prisma.user.deleteMany();
   });
 
+  afterAll(async () => {
+    await app.close();
+    await prisma.$disconnect();
+  });
+
   it('POST /auth/register creates a user', async () => {
     const response = await request(app.getHttpServer())
       .post('/auth/register')
