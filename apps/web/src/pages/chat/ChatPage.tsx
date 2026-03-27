@@ -13,6 +13,7 @@ export function ChatPage() {
     sessions,
     currentSessionId,
     messages,
+    toolExecutions,
     draft,
     isStreaming,
     setSessions,
@@ -20,6 +21,9 @@ export function ChatPage() {
     setMessages,
     setDraft,
     applyRunStarted,
+    applyToolStarted,
+    applyToolCompleted,
+    applyToolFailed,
     applyTextDelta,
     applyRunCompleted,
     applyRunFailed
@@ -66,6 +70,21 @@ export function ChatPage() {
             return;
           }
 
+          if (event.type === 'tool_started') {
+            applyToolStarted(event.toolExecution);
+            return;
+          }
+
+          if (event.type === 'tool_completed') {
+            applyToolCompleted(event.toolExecution);
+            return;
+          }
+
+          if (event.type === 'tool_failed') {
+            applyToolFailed(event.toolExecution);
+            return;
+          }
+
           if (event.type === 'text_delta') {
             applyTextDelta(event.delta);
             return;
@@ -99,7 +118,11 @@ export function ChatPage() {
       />
 
       <main>
-        {messages.length === 0 ? <EmptyChatState /> : <MessageList messages={messages} />}
+        {messages.length === 0 ? (
+          <EmptyChatState />
+        ) : (
+          <MessageList messages={messages} toolExecutions={toolExecutions} />
+        )}
         <ChatComposer value={draft} disabled={isStreaming} onChange={setDraft} onSubmit={handleSubmit} />
       </main>
     </div>

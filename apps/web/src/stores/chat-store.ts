@@ -1,10 +1,11 @@
 import { create } from 'zustand';
-import type { ChatMessage, ChatSessionSummary } from '@ai-chat/shared';
+import type { ChatMessage, ChatSessionSummary, ToolExecutionSummary } from '@ai-chat/shared';
 
 type ChatState = {
   sessions: ChatSessionSummary[];
   currentSessionId: string | null;
   messages: ChatMessage[];
+  toolExecutions: ToolExecutionSummary[];
   draft: string;
   isStreaming: boolean;
   error: string | null;
@@ -14,6 +15,9 @@ type ChatState = {
   setMessages: (messages: ChatMessage[]) => void;
   setDraft: (draft: string) => void;
   applyRunStarted: (session: ChatSessionSummary, userMessage: ChatMessage) => void;
+  applyToolStarted: (toolExecution: ToolExecutionSummary) => void;
+  applyToolCompleted: (toolExecution: ToolExecutionSummary) => void;
+  applyToolFailed: (toolExecution: ToolExecutionSummary) => void;
   applyTextDelta: (delta: string) => void;
   applyRunCompleted: (session: ChatSessionSummary, message: ChatMessage) => void;
   applyRunFailed: (message: string) => void;
@@ -29,30 +33,55 @@ const emptyAssistantMessage = (sessionId: string): ChatMessage => ({
   createdAt: new Date().toISOString()
 });
 
+const upsertToolExecution = (
+  toolExecutions: ToolExecutionSummary[],
+  toolExecution: ToolExecutionSummary
+): ToolExecutionSummary[] => {
+  const next = toolExecutions.filter((item) => item.id !== toolExecution.id);
+  return [...next, toolExecution];
+};
+
 const initialState = {
   sessions: [],
   currentSessionId: null,
   messages: [],
+  toolExecutions: [],
   draft: '',
   isStreaming: false,
   error: null
-} satisfies Pick<ChatState, 'sessions' | 'currentSessionId' | 'messages' | 'draft' | 'isStreaming' | 'error'>;
+} satisfies Pick<
+  ChatState,
+  'sessions' | 'currentSessionId' | 'messages' | 'toolExecutions' | 'draft' | 'isStreaming' | 'error'
+>;
 
 export const useChatStore = create<ChatState>((set) => ({
   ...initialState,
   reset: () => set(initialState),
   setSessions: (sessions) => set({ sessions }),
-  setCurrentSession: (currentSessionId) => set({ currentSessionId, messages: [], error: null }),
-  setMessages: (messages) => set({ messages }),
+  setCurrentSession: (currentSessionId) => set({ currentSessionId, messages: [], toolExecutions: [], error: null }),
+  setMessages: (messages) => set({ messages, toolExecutions: [] }),
   setDraft: (draft) => set({ draft }),
   applyRunStarted: (session, userMessage) =>
     set((state) => ({
       currentSessionId: session.id,
       sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
       messages: [userMessage, emptyAssistantMessage(session.id)],
+      toolExecutions: [],
       isStreaming: true,
       error: null,
       draft: ''
+    })),
+  applyToolStarted: (toolExecution) =>
+    set((state) => ({
+      toolExecutions: upsertToolExecution(state.toolExecutions, toolExecution)
+    })),
+  applyToolCompleted: (toolExecution) =>
+    set((state) => ({
+      toolExecutions: upsertToolExecution(state.toolExecutions, toolExecution)
+    })),
+  applyToolFailed: (toolExecution) =>
+    set((state) => ({
+      toolExecutions: upsertToolExecution(state.toolExecutions, toolExecution)
     })),
   applyTextDelta: (delta) =>
     set((state) => ({
