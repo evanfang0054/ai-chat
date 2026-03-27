@@ -16,6 +16,7 @@ export const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(1),
   API_PORT: z.coerce.number().default(3000),
+  SCHEDULE_TICK_EVERY_MS: z.coerce.number().int().positive().default(30000),
   DEEPSEEK_API_KEY: z.string().min(1),
   DEEPSEEK_BASE_URL: z.string().url().optional(),
   DEEPSEEK_MODEL: z.string().min(1).default('deepseek-chat')
