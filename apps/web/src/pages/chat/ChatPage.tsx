@@ -118,7 +118,7 @@ export function ChatPage() {
       />
 
       <main>
-        {messages.length === 0 ? (
+        {messages.length === 0 && toolExecutions.length === 0 ? (
           <EmptyChatState />
         ) : (
           <MessageList messages={messages} toolExecutions={toolExecutions} />
