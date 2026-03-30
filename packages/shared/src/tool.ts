@@ -1,4 +1,4 @@
-export type ToolName = 'get_current_time';
+export type ToolName = 'get_current_time' | 'manage_schedule';
 
 export type ToolExecutionStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 

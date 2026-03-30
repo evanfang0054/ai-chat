@@ -341,6 +341,171 @@ describe('ScheduleRunnerService', () => {
     });
   });
 
+  it('forces get_current_time for schedule prompts that ask to call get_current_time', async () => {
+    const dueSchedule = createScheduleRecord({
+      id: 'schedule-force-tool',
+      taskPrompt: '调用 get_current_time'
+    });
+    const createdRun = {
+      id: 'run-force-tool',
+      scheduleId: dueSchedule.id,
+      userId: dueSchedule.userId,
+      status: 'RUNNING' as const,
+      taskPromptSnapshot: dueSchedule.taskPrompt,
+      resultSummary: null,
+      errorMessage: null,
+      chatSessionId: null,
+      startedAt: now,
+      finishedAt: null,
+      createdAt: now
+    };
+
+    const prisma = {
+      schedule: {
+        findMany: jest.fn().mockResolvedValue([dueSchedule]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({
+          ...dueSchedule,
+          enabled: false,
+          lastRunAt: now,
+          nextRunAt: null
+        })
+      },
+      scheduleRun: {
+        create: jest.fn().mockResolvedValue(createdRun),
+        update: jest.fn().mockResolvedValue(createdRun)
+      }
+    };
+
+    const chatService = {
+      createSessionWithFirstMessage: jest.fn().mockResolvedValue({
+        session: {
+          id: 'session-force-tool',
+          userId: dueSchedule.userId,
+          title: dueSchedule.title,
+          model: 'deepseek-chat',
+          createdAt: now,
+          updatedAt: now
+        },
+        userMessage: {
+          id: 'msg-force-tool-user',
+          sessionId: 'session-force-tool',
+          role: 'USER',
+          content: dueSchedule.taskPrompt,
+          createdAt: now
+        }
+      }),
+      saveAssistantMessage: jest.fn().mockResolvedValue({
+        id: 'msg-force-tool-assistant',
+        sessionId: 'session-force-tool',
+        role: 'ASSISTANT',
+        content: '2026-03-27T09:00:00.000Z',
+        createdAt: now
+      })
+    };
+
+    const agentService = {
+      streamChatReply: jest.fn().mockReturnValue(makeAgentStream(['2026-03-27T09:00:00.000Z']))
+    };
+
+    const { ScheduleRunnerService } = await import('./schedule-runner.service');
+    const service = new ScheduleRunnerService(prisma as never, chatService as never, agentService as never);
+
+    await service.processDueSchedules();
+
+    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      userId: dueSchedule.userId,
+      sessionId: 'session-force-tool',
+      history: [],
+      prompt: dueSchedule.taskPrompt,
+      forcedToolCall: {
+        name: 'get_current_time',
+        input: { timezone: 'UTC' }
+      }
+    });
+  });
+
+  it('does not force get_current_time for unrelated schedule prompts', async () => {
+    const dueSchedule = createScheduleRecord({
+      id: 'schedule-no-force',
+      taskPrompt: 'Summarize unread issues'
+    });
+    const createdRun = {
+      id: 'run-no-force',
+      scheduleId: dueSchedule.id,
+      userId: dueSchedule.userId,
+      status: 'RUNNING' as const,
+      taskPromptSnapshot: dueSchedule.taskPrompt,
+      resultSummary: null,
+      errorMessage: null,
+      chatSessionId: null,
+      startedAt: now,
+      finishedAt: null,
+      createdAt: now
+    };
+
+    const prisma = {
+      schedule: {
+        findMany: jest.fn().mockResolvedValue([dueSchedule]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({
+          ...dueSchedule,
+          enabled: false,
+          lastRunAt: now,
+          nextRunAt: null
+        })
+      },
+      scheduleRun: {
+        create: jest.fn().mockResolvedValue(createdRun),
+        update: jest.fn().mockResolvedValue(createdRun)
+      }
+    };
+
+    const chatService = {
+      createSessionWithFirstMessage: jest.fn().mockResolvedValue({
+        session: {
+          id: 'session-no-force',
+          userId: dueSchedule.userId,
+          title: dueSchedule.title,
+          model: 'deepseek-chat',
+          createdAt: now,
+          updatedAt: now
+        },
+        userMessage: {
+          id: 'msg-no-force-user',
+          sessionId: 'session-no-force',
+          role: 'USER',
+          content: dueSchedule.taskPrompt,
+          createdAt: now
+        }
+      }),
+      saveAssistantMessage: jest.fn().mockResolvedValue({
+        id: 'msg-no-force-assistant',
+        sessionId: 'session-no-force',
+        role: 'ASSISTANT',
+        content: 'done',
+        createdAt: now
+      })
+    };
+
+    const agentService = {
+      streamChatReply: jest.fn().mockReturnValue(makeAgentStream(['done']))
+    };
+
+    const { ScheduleRunnerService } = await import('./schedule-runner.service');
+    const service = new ScheduleRunnerService(prisma as never, chatService as never, agentService as never);
+
+    await service.processDueSchedules();
+
+    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      userId: dueSchedule.userId,
+      sessionId: 'session-no-force',
+      history: [],
+      prompt: dueSchedule.taskPrompt,
+      forcedToolCall: undefined
+    });
+  });
+
   it('processes CRON schedules and computes next run time', async () => {
     const cronSchedule = createScheduleRecord({
       id: 'schedule-3',

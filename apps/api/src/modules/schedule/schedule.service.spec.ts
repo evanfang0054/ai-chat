@@ -394,6 +394,52 @@ describe('ScheduleService', () => {
     });
   });
 
+  it('updateSchedule preserves existing cronExpr when type stays CRON without cronExpr', async () => {
+    const existing = createScheduleRecord({
+      id: 'schedule-2a',
+      type: 'CRON',
+      cronExpr: '0 9 * * *',
+      runAt: null,
+      timezone: 'UTC',
+      nextRunAt: new Date('2026-03-28T09:00:00.000Z')
+    });
+    const updated = createScheduleRecord({
+      ...existing,
+      title: 'Evening summary',
+      nextRunAt: new Date('2026-03-27T09:00:00.000Z'),
+      updatedAt: new Date('2026-03-27T08:35:00.000Z')
+    });
+    const findFirst = jest.fn().mockResolvedValue(existing);
+    const update = jest.fn().mockResolvedValue(updated);
+    const prisma = {
+      schedule: {
+        findFirst,
+        update
+      }
+    };
+
+    const service = new ScheduleService(prisma as never);
+
+    await service.updateSchedule(userId, existing.id, {
+      title: 'Evening summary',
+      type: 'CRON'
+    });
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: existing.id },
+      data: {
+        title: 'Evening summary',
+        taskPrompt: existing.taskPrompt,
+        type: 'CRON',
+        cronExpr: '0 9 * * *',
+        runAt: null,
+        timezone: 'UTC',
+        enabled: true,
+        nextRunAt: new Date('2026-03-27T09:00:00.000Z')
+      }
+    });
+  });
+
   it('updateSchedule merges existing values and recomputes nextRunAt', async () => {
     const existing = createScheduleRecord({
       id: 'schedule-2',

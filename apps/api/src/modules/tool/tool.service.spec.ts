@@ -34,7 +34,15 @@ describe('ToolService', () => {
     };
 
     const { ToolService } = await import('./tool.service');
-    const service = new ToolService(prisma as never);
+    const manageScheduleToolFactory = {
+      create: jest.fn().mockReturnValue({
+        name: 'manage_schedule',
+        description: 'manage schedules',
+        schema: { parse: jest.fn() },
+        execute: jest.fn()
+      })
+    };
+    const service = new ToolService(prisma as never, manageScheduleToolFactory as never);
     const started = await service.startToolExecution('get_current_time', { timezone: 'UTC' }, {
       sessionId: 'session-1',
       userId: 'user-1'
@@ -89,7 +97,15 @@ describe('ToolService', () => {
     };
 
     const { ToolService } = await import('./tool.service');
-    const service = new ToolService(prisma as never);
+    const manageScheduleToolFactory = {
+      create: jest.fn().mockReturnValue({
+        name: 'manage_schedule',
+        description: 'manage schedules',
+        schema: { parse: jest.fn() },
+        execute: jest.fn()
+      })
+    };
+    const service = new ToolService(prisma as never, manageScheduleToolFactory as never);
 
     const originalNow = Date.now;
     Date.now = jest.fn().mockReturnValue(new Date('2026-03-26T12:05:00.000Z').valueOf());

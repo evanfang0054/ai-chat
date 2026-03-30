@@ -10,6 +10,20 @@ import { LlmService } from '../llm/llm.service';
 import { ToolService } from '../tool/tool.service';
 import type { AgentHistoryMessage, AgentStreamEvent, StreamChatReplyInput } from './agent.types';
 
+const AGENT_SYSTEM_PROMPT = `You are a tool-using assistant inside an AI chat product.
+
+Rules:
+- If the user asks you to perform an action that matches an available tool, call the tool instead of asking a follow-up question.
+- If a schedule or time request can be completed with a reasonable default timezone, use UTC by default.
+- Do not ask the user for timezone before creating a schedule unless timezone is explicitly required to avoid an incorrect result.
+- When the user asks to create, update, list, enable, disable, or delete schedules, prefer using manage_schedule.
+- For schedule creation requests written in natural language, infer the structured manage_schedule arguments yourself whenever a reasonable default exists.
+- When creating schedules, translate phrases like "every 10 seconds", "every minute", or "tomorrow at 9am" into manage_schedule fields such as type, cronExpr, runAt, title, taskPrompt, and timezone.
+- If the user describes the task to run, copy that instruction into taskPrompt and create a short title instead of asking for one.
+- When the user asks for the current time, prefer using get_current_time.
+- After a tool succeeds, briefly confirm the result in natural language.
+- Only ask a follow-up question when a required tool argument cannot be inferred and no safe default exists.`;
+
 class AgentToolExecutionFailedError extends Error {
   constructor(public readonly execution: ToolExecutionFailedSummary) {
     super(execution.errorMessage);
@@ -24,8 +38,27 @@ export class AgentService {
   ) {}
 
   async *streamChatReply(input: StreamChatReplyInput): AsyncGenerator<AgentStreamEvent> {
+    if (input.forcedToolCall) {
+      let hasOutput = false;
+
+      for await (const event of this.runToolCall(input.forcedToolCall.name, input.forcedToolCall.input, input)) {
+        if (event.type === 'text_delta' && event.delta) {
+          hasOutput = true;
+        }
+        yield event;
+      }
+
+      if (!hasOutput) {
+        throw new Error('Agent response was empty');
+      }
+
+      yield { type: 'run_completed' };
+      return;
+    }
+
     const model = this.llmService.createChatModel();
     const messages = [
+      new SystemMessage(AGENT_SYSTEM_PROMPT),
       ...input.history.map((message) => this.toLangChainMessage(message)),
       new HumanMessage(input.prompt)
     ];
@@ -48,7 +81,7 @@ export class AgentService {
       }
     }
 
-    const text = this.readChunkText(response.content);
+    const text = toolCalls.length === 0 ? this.readChunkText(response.content) : '';
     if (text) {
       hasOutput = true;
       yield { type: 'text_delta', delta: text };

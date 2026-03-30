@@ -2,8 +2,9 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma, ToolExecution } from '@prisma/client';
 import { ToolExecutionStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import type { ToolDefinition, ToolExecutionContext, ToolInput, ToolMetadata } from './tool.types';
+import { ManageScheduleToolFactory } from './tools/manage-schedule.tool';
 import { getCurrentTimeTool } from './tools/get-current-time.tool';
+import type { ToolDefinition, ToolExecutionContext, ToolInput, ToolMetadata } from './tool.types';
 
 class ToolExecutionError extends Error {
   constructor(
@@ -16,9 +17,17 @@ class ToolExecutionError extends Error {
 
 @Injectable()
 export class ToolService {
-  private readonly tools = new Map<string, ToolDefinition>([[getCurrentTimeTool.name, getCurrentTimeTool]]);
+  private readonly tools: Map<string, ToolDefinition>;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    manageScheduleToolFactory: ManageScheduleToolFactory
+  ) {
+    this.tools = new Map<string, ToolDefinition>([
+      [getCurrentTimeTool.name, getCurrentTimeTool],
+      ['manage_schedule', manageScheduleToolFactory.create()]
+    ]);
+  }
 
   listDefinitions(): ToolMetadata[] {
     return Array.from(this.tools.values(), ({ name, description }) => ({ name, description }));
