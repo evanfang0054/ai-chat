@@ -24,8 +24,9 @@ export interface StreamChatReplyInput {
 }
 
 export type AgentStreamEvent =
-  | { type: 'tool_started'; toolExecution: ToolExecutionRunningSummary }
-  | { type: 'tool_completed'; toolExecution: ToolExecutionSucceededSummary }
-  | { type: 'tool_failed'; toolExecution: ToolExecutionFailedSummary }
-  | { type: 'text_delta'; delta: string }
-  | { type: 'run_completed' };
+  | { type: 'text-delta'; textDelta: string }
+  | { type: 'tool-input-start'; toolExecution: ToolExecutionRunningSummary }
+  | { type: 'tool-input-available'; toolExecution: ToolExecutionRunningSummary }
+  | { type: 'tool-output-available'; toolExecution: ToolExecutionSucceededSummary }
+  | { type: 'tool-output-error'; toolExecution: ToolExecutionFailedSummary }
+  | { type: 'finish' };

@@ -1,3 +1,4 @@
+import type { FormEvent } from 'react';
 import { Button, Textarea } from '../ui';
 
 export function ChatComposer(props: {
@@ -6,8 +7,13 @@ export function ChatComposer(props: {
   onChange: (value: string) => void;
   onSubmit: () => void;
 }) {
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    props.onSubmit();
+  };
+
   return (
-    <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+    <form className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4" onSubmit={handleSubmit}>
       <Textarea
         rows={4}
         value={props.value}
@@ -15,10 +21,10 @@ export function ChatComposer(props: {
         onChange={(event) => props.onChange(event.target.value)}
       />
       <div className="flex justify-end">
-        <Button disabled={props.disabled} onClick={props.onSubmit}>
+        <Button disabled={props.disabled} type="submit">
           Send
         </Button>
       </div>
-    </div>
+    </form>
   );
 }

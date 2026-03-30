@@ -1,7 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import type { ToolExecution } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { env } from '../../common/config/env';
-import type { GetChatMessagesResponse, ListChatSessionsResponse, ChatSessionSummary, ChatMessage } from '@ai-chat/shared';
+import type {
+  ChatMessage,
+  ChatSessionSummary,
+  GetChatTimelineResponse,
+  ListChatSessionsResponse,
+  ToolExecutionSummary
+} from '@ai-chat/shared';
 
 @Injectable()
 export class ChatService {
@@ -18,26 +25,27 @@ export class ChatService {
     };
   }
 
-  async getSessionMessages(userId: string, sessionId: string): Promise<GetChatMessagesResponse> {
-    const session = await this.prisma.chatSession.findFirst({
-      where: {
-        id: sessionId,
-        userId
-      },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' }
-        }
-      }
-    });
+  async getSessionMessages(userId: string, sessionId: string): Promise<GetChatTimelineResponse> {
+    return this.getSessionTimeline(userId, sessionId);
+  }
 
-    if (!session) {
-      throw new NotFoundException('Chat session not found');
-    }
+  async getSessionTimeline(userId: string, sessionId: string): Promise<GetChatTimelineResponse> {
+    const session = await this.getSessionOrThrow(userId, sessionId);
+    const [messages, toolExecutions] = await Promise.all([
+      this.prisma.chatMessage.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: 'asc' }
+      }),
+      this.prisma.toolExecution.findMany({
+        where: { sessionId },
+        orderBy: { startedAt: 'asc' }
+      })
+    ]);
 
     return {
       session: this.formatSessionSummary(session),
-      messages: session.messages.map((message) => this.formatMessage(message))
+      messages: messages.map((message) => this.formatMessage(message)),
+      toolExecutions: toolExecutions.map((execution) => this.formatToolExecution(execution))
     };
   }
 
@@ -111,6 +119,16 @@ export class ChatService {
     return message;
   }
 
+  async finalizeAssistantReply(sessionId: string, assistantText: string) {
+    const message = await this.saveAssistantMessage(sessionId, assistantText);
+    const session = await this.prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
+
+    return {
+      session: this.formatSessionSummary(session),
+      message: this.formatMessage(message)
+    };
+  }
+
   private buildTitleFromFirstMessage(content: string) {
     const trimmed = content.trim();
     if (trimmed.length <= 50) {
@@ -141,5 +159,27 @@ export class ChatService {
       content: message.content,
       createdAt: message.createdAt.toISOString()
     };
+  }
+
+  formatToolExecution(execution: ToolExecution): ToolExecutionSummary {
+    return {
+      id: execution.id,
+      sessionId: execution.sessionId,
+      toolName: execution.toolName as ToolExecutionSummary['toolName'],
+      status: execution.status,
+      input: this.toNullableJsonString(execution.input),
+      output: this.toNullableJsonString(execution.output),
+      errorMessage: execution.errorMessage,
+      startedAt: execution.startedAt.toISOString(),
+      finishedAt: execution.finishedAt ? execution.finishedAt.toISOString() : null
+    };
+  }
+
+  private toNullableJsonString(value: unknown) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    return typeof value === 'string' ? value : JSON.stringify(value);
   }
 }

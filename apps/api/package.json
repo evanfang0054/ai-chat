@@ -24,6 +24,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.0",
     "@prisma/client": "^6.5.0",
+    "ai": "^4.3.16",
     "bcryptjs": "^3.0.2",
     "bullmq": "^5.58.5",
     "class-transformer": "^0.5.1",

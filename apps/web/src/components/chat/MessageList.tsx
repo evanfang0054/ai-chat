@@ -1,17 +1,9 @@
-import type { ChatMessage, ToolExecutionSummary } from '@ai-chat/shared';
+import type { UIMessage } from 'ai';
 import { MessageItem } from './MessageItem';
-import { ToolExecutionList } from './ToolExecutionList';
 
-export function MessageList({
-  messages,
-  toolExecutions
-}: {
-  messages: ChatMessage[];
-  toolExecutions: ToolExecutionSummary[];
-}) {
+export function MessageList({ messages }: { messages: UIMessage[] }) {
   return (
     <div className="space-y-4">
-      <ToolExecutionList toolExecutions={toolExecutions} />
       {messages.map((message) => (
         <MessageItem key={message.id} message={message} />
       ))}

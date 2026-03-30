@@ -47,7 +47,7 @@ export class AgentService {
       let hasOutput = false;
 
       for await (const event of this.runToolCall(input.forcedToolCall.name, input.forcedToolCall.input, input)) {
-        if (event.type === 'text_delta' && event.delta) {
+        if (event.type === 'text-delta' && event.textDelta) {
           hasOutput = true;
         }
         yield event;
@@ -57,7 +57,7 @@ export class AgentService {
         throw new Error('Agent response was empty');
       }
 
-      yield { type: 'run_completed' };
+      yield { type: 'finish' };
       return;
     }
 
@@ -78,7 +78,7 @@ export class AgentService {
     if (toolCalls.length > 0) {
       for (const toolCall of toolCalls) {
         for await (const event of this.runToolCall(toolCall.name, this.readToolCallInput(toolCall.args), input)) {
-          if (event.type === 'text_delta' && event.delta) {
+          if (event.type === 'text-delta' && event.textDelta) {
             hasOutput = true;
           }
           yield event;
@@ -89,14 +89,14 @@ export class AgentService {
     const text = toolCalls.length === 0 ? this.readChunkText(response.content) : '';
     if (text) {
       hasOutput = true;
-      yield { type: 'text_delta', delta: text };
+      yield { type: 'text-delta', textDelta: text };
     }
 
     if (!hasOutput) {
       throw new Error('Agent response was empty');
     }
 
-    yield { type: 'run_completed' };
+    yield { type: 'finish' };
   }
 
   private createLangChainTools() {
@@ -117,18 +117,19 @@ export class AgentService {
       userId: context.userId
     });
 
-    yield { type: 'tool_started', toolExecution: this.toRunningExecutionSummary(started.execution) };
+    yield { type: 'tool-input-start', toolExecution: this.toRunningExecutionSummary(started.execution) };
+    yield { type: 'tool-input-available', toolExecution: this.toRunningExecutionSummary(started.execution) };
 
     try {
       const result = await started.run();
       yield {
-        type: 'tool_completed',
+        type: 'tool-output-available',
         toolExecution: this.toSucceededExecutionSummary(result.execution)
       };
 
       const response = this.buildToolResponseText(result.outputText);
       if (response) {
-        yield { type: 'text_delta', delta: response };
+        yield { type: 'text-delta', textDelta: response };
       }
     } catch (error) {
       const execution = this.readExecutionFromError(error);
@@ -138,7 +139,7 @@ export class AgentService {
 
       const failedSummary = this.toFailedExecutionSummary(execution);
       yield {
-        type: 'tool_failed',
+        type: 'tool-output-error',
         toolExecution: failedSummary
       };
       throw new AgentToolExecutionFailedError(failedSummary);

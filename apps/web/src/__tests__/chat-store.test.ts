@@ -6,117 +6,59 @@ afterEach(() => {
 });
 
 describe('chat-store', () => {
-  it('applies run events to current session', () => {
+  it('sets and upserts sessions', () => {
     const store = useChatStore.getState();
     const now = new Date().toISOString();
-    const session = {
+    const sessionOne = {
       id: 'session-1',
-      title: 'Hello',
+      title: 'First',
       model: 'deepseek-chat',
       createdAt: now,
       updatedAt: now
     };
-    const userMessage = {
-      id: 'msg-user',
-      sessionId: 'session-1',
-      role: 'USER' as const,
-      content: 'Hello',
-      createdAt: now
-    };
-    const assistantMessage = {
-      id: 'msg-assistant',
-      sessionId: 'session-1',
-      role: 'ASSISTANT' as const,
-      content: 'Hi there',
-      createdAt: now
+    const sessionTwo = {
+      id: 'session-2',
+      title: 'Second',
+      model: 'deepseek-chat',
+      createdAt: now,
+      updatedAt: now
     };
 
-    store.applyRunStarted(session, userMessage);
-    expect(useChatStore.getState().isStreaming).toBe(true);
+    store.setSessions([sessionOne]);
+    expect(useChatStore.getState().sessions).toEqual([sessionOne]);
 
-    store.applyTextDelta('Hello');
-    expect(useChatStore.getState().messages.at(-1)?.content).toBe('Hello');
+    store.upsertSession(sessionTwo);
+    expect(useChatStore.getState().sessions).toEqual([sessionTwo, sessionOne]);
 
-    store.applyTextDelta(' there');
-    store.applyRunCompleted(session, assistantMessage);
-
-    const state = useChatStore.getState();
-    expect(state.currentSessionId).toBe('session-1');
-    expect(state.messages).toHaveLength(2);
-    expect(state.messages[1].content).toBe('Hi there');
-    expect(state.isStreaming).toBe(false);
-
-    store.applyRunStarted(session, userMessage);
-    store.applyRunFailed('Chat stream failed');
-    expect(useChatStore.getState().error).toBe('Chat stream failed');
+    store.upsertSession({ ...sessionOne, title: 'First updated' });
+    expect(useChatStore.getState().sessions).toEqual([
+      { ...sessionOne, title: 'First updated' },
+      sessionTwo
+    ]);
   });
 
-  it('updates tool executions as tool events arrive', () => {
+  it('tracks current session and resets state', () => {
     const store = useChatStore.getState();
     const now = new Date().toISOString();
-    const session = {
-      id: 'session-1',
-      title: 'Hello',
-      model: 'deepseek-chat',
-      createdAt: now,
-      updatedAt: now
-    };
-    const userMessage = {
-      id: 'msg-user',
-      sessionId: 'session-1',
-      role: 'USER' as const,
-      content: 'What time is it?',
-      createdAt: now
-    };
 
-    store.applyRunStarted(session, userMessage);
-    store.applyToolStarted({
-      id: 'tool-1',
-      sessionId: 'session-1',
-      toolName: 'get_current_time',
-      status: 'RUNNING',
-      input: '{"timezone":"UTC"}',
-      output: null,
-      errorMessage: null,
-      startedAt: now,
-      finishedAt: null
-    });
-
-    expect(useChatStore.getState().toolExecutions).toEqual([
-      expect.objectContaining({ id: 'tool-1', status: 'RUNNING' })
+    store.setSessions([
+      {
+        id: 'session-1',
+        title: 'First',
+        model: 'deepseek-chat',
+        createdAt: now,
+        updatedAt: now
+      }
     ]);
+    store.setCurrentSession('session-1');
 
-    store.applyToolCompleted({
-      id: 'tool-1',
-      sessionId: 'session-1',
-      toolName: 'get_current_time',
-      status: 'SUCCEEDED',
-      input: '{"timezone":"UTC"}',
-      output: '{"now":"2026-03-27T00:00:00.000Z"}',
-      errorMessage: null,
-      startedAt: now,
-      finishedAt: now
+    expect(useChatStore.getState().currentSessionId).toBe('session-1');
+
+    store.reset();
+
+    expect(useChatStore.getState()).toMatchObject({
+      sessions: [],
+      currentSessionId: null
     });
-
-    expect(useChatStore.getState().toolExecutions).toEqual([
-      expect.objectContaining({ id: 'tool-1', status: 'SUCCEEDED' })
-    ]);
-
-    store.applyToolFailed({
-      id: 'tool-2',
-      sessionId: 'session-1',
-      toolName: 'get_current_time',
-      status: 'FAILED',
-      input: '{"timezone":"UTC"}',
-      output: null,
-      errorMessage: 'boom',
-      startedAt: now,
-      finishedAt: now
-    });
-
-    expect(useChatStore.getState().toolExecutions).toEqual([
-      expect.objectContaining({ id: 'tool-1', status: 'SUCCEEDED' }),
-      expect.objectContaining({ id: 'tool-2', status: 'FAILED', errorMessage: 'boom' })
-    ]);
   });
 });

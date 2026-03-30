@@ -108,8 +108,8 @@ export class ScheduleRunnerService {
         prompt: schedule.taskPrompt,
         forcedToolCall: this.buildForcedToolCall(schedule.taskPrompt)
       })) {
-        if (event.type === 'text_delta') {
-          assistantText += event.delta;
+        if (event.type === 'text-delta') {
+          assistantText += event.textDelta;
         }
       }
 

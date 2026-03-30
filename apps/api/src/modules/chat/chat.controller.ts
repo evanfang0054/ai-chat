@@ -1,3 +1,5 @@
+import { formatDataStreamPart, pipeDataStreamToResponse } from 'ai';
+import type { JSONValue } from 'ai';
 import { BadRequestException, Body, Controller, Get, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -15,14 +17,27 @@ export class ChatController {
     private readonly agentService: AgentService
   ) {}
 
-  private normalizeStreamEventSessionId<T extends { toolExecution: { sessionId: string } }>(event: T, sessionId: string): T {
+  private normalizeToolExecutionSessionId<T extends { sessionId: string }>(toolExecution: T, sessionId: string): T {
     return {
-      ...event,
-      toolExecution: {
-        ...event.toolExecution,
-        sessionId
-      }
+      ...toolExecution,
+      sessionId
     };
+  }
+
+  private parseJsonString(value: string | null) {
+    if (!value) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return { value };
+    }
+  }
+
+  private toJsonValue<T>(value: T): JSONValue {
+    return JSON.parse(JSON.stringify(value)) as JSONValue;
   }
 
   @Get('sessions')
@@ -41,14 +56,11 @@ export class ChatController {
     @Body() dto: CreateChatMessageDto,
     @Res() res: Response
   ) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
     const content = dto.content.trim();
     if (!content) {
       throw new BadRequestException('Message content is required');
     }
+
     let session;
     let userMessage;
 
@@ -59,55 +71,135 @@ export class ChatController {
       ({ session, userMessage } = await this.chatService.createSessionWithFirstMessage(user.userId, content));
     }
 
-    res.write(
-      `event: message\ndata: ${JSON.stringify({
-        type: 'run_started',
-        session: this.chatService.formatSessionSummary(session),
-        userMessage: this.chatService.formatMessage(userMessage)
-      })}\n\n`
-    );
-
     const historyResult = await this.chatService.listMessages(user.userId, session.id);
     const history = historyResult.messages.slice(0, -1).map((message) => ({
       role: message.role,
       content: message.content
     }));
-    let assistantText = '';
+    const assistantMessageId = `assistant-${session.id}`;
+    const sessionSummary = this.chatService.formatSessionSummary(session);
+    const userMessageSummary = this.chatService.formatMessage(userMessage);
 
-    try {
-      for await (const event of this.agentService.streamChatReply({
-        userId: user.userId,
-        sessionId: session.id,
-        history,
-        prompt: content
-      })) {
-        if (event.type === 'text_delta') {
-          assistantText += event.delta;
-          res.write(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
-          continue;
+    pipeDataStreamToResponse(res, {
+      status: 201,
+      execute: async (writer) => {
+        let assistantText = '';
+
+        writer.writeData(
+          this.toJsonValue({
+            type: 'session-start',
+            sessionId: sessionSummary.id,
+            userMessageId: userMessageSummary.id,
+            session: sessionSummary,
+            message: userMessageSummary
+          })
+        );
+        writer.write(formatDataStreamPart('start_step', { messageId: assistantMessageId }));
+
+        for await (const event of this.agentService.streamChatReply({
+          userId: user.userId,
+          sessionId: session.id,
+          history,
+          prompt: content
+        })) {
+          if (event.type === 'text-delta') {
+            assistantText += event.textDelta;
+            writer.write(formatDataStreamPart('text', event.textDelta));
+            continue;
+          }
+
+          if (event.type === 'tool-input-start') {
+            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
+            writer.writeData(
+              this.toJsonValue({
+                type: 'tool-input-start',
+                toolCallId: toolExecution.id,
+                toolName: toolExecution.toolName,
+                toolExecution
+              })
+            );
+            continue;
+          }
+
+          if (event.type === 'tool-input-available') {
+            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
+            writer.write(
+              formatDataStreamPart('tool_call', {
+                toolCallId: toolExecution.id,
+                toolName: toolExecution.toolName,
+                args: this.parseJsonString(toolExecution.input)
+              })
+            );
+            writer.writeData(
+              this.toJsonValue({
+                type: 'tool-input-available',
+                toolCallId: toolExecution.id,
+                toolName: toolExecution.toolName,
+                input: toolExecution.input,
+                toolExecution
+              })
+            );
+            continue;
+          }
+
+          if (event.type === 'tool-output-available') {
+            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
+            writer.write(
+              formatDataStreamPart('tool_result', {
+                toolCallId: toolExecution.id,
+                result: this.parseJsonString(toolExecution.output)
+              })
+            );
+            writer.writeData(
+              this.toJsonValue({
+                type: 'tool-output-available',
+                toolCallId: toolExecution.id,
+                toolName: toolExecution.toolName,
+                output: toolExecution.output,
+                toolExecution
+              })
+            );
+            continue;
+          }
+
+          if (event.type === 'tool-output-error') {
+            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
+            writer.writeData(
+              this.toJsonValue({
+                type: 'tool-output-error',
+                toolCallId: toolExecution.id,
+                toolName: toolExecution.toolName,
+                errorText: toolExecution.errorMessage,
+                toolExecution
+              })
+            );
+            throw new Error(toolExecution.errorMessage);
+          }
         }
 
-        if (event.type === 'tool_started' || event.type === 'tool_completed' || event.type === 'tool_failed') {
-          res.write(
-            `event: message\ndata: ${JSON.stringify(this.normalizeStreamEventSessionId(event, session.id))}\n\n`
-          );
-        }
-      }
-
-      const assistantMessage = await this.chatService.saveAssistantMessage(session.id, assistantText);
-      const refreshedSession = await this.chatService.getSessionOrThrow(user.userId, session.id);
-      res.write(
-        `event: message\ndata: ${JSON.stringify({
-          type: 'run_completed',
-          session: this.chatService.formatSessionSummary(refreshedSession),
-          message: this.chatService.formatMessage(assistantMessage)
-        })}\n\n`
-      );
-      res.end();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Chat stream failed';
-      res.write(`event: message\ndata: ${JSON.stringify({ type: 'run_failed', message })}\n\n`);
-      res.end();
-    }
+        const finalized = await this.chatService.finalizeAssistantReply(session.id, assistantText);
+        writer.write(
+          formatDataStreamPart('finish_step', {
+            isContinued: false,
+            finishReason: 'stop'
+          })
+        );
+        writer.write(
+          formatDataStreamPart('finish_message', {
+            finishReason: 'stop'
+          })
+        );
+        writer.writeData(
+          this.toJsonValue({
+            type: 'session-finish',
+            sessionId: finalized.session.id,
+            assistantMessageId: finalized.message.id,
+            session: finalized.session,
+            message: finalized.message
+          })
+        );
+      },
+      onError: (error: unknown) => (error instanceof Error ? error.message : 'Chat stream failed')
+    });
   }
 }

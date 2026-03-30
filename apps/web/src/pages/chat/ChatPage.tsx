@@ -1,4 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useChat } from '@ai-sdk/react';
+import type { UIMessage } from 'ai';
 import { useSearchParams } from 'react-router-dom';
 import { EmptyChatState } from '../../components/chat/EmptyChatState';
 import { SessionSidebar } from '../../components/chat/SessionSidebar';
@@ -8,31 +10,61 @@ import { AppShell } from '../../components/layout/AppShell';
 import { Card } from '../../components/ui';
 import { useAuthStore } from '../../stores/auth-store';
 import { useChatStore } from '../../stores/chat-store';
-import { listChatSessions, getChatMessages, streamChatMessage } from '../../services/chat';
+import {
+  createChatRequestBody,
+  createUiMessagesFromTimeline,
+  getChatMessages,
+  getChatStreamUrl,
+  listChatSessions
+} from '../../services/chat';
 
 export function ChatPage() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get('sessionId');
-  const {
-    sessions,
-    currentSessionId,
-    messages,
-    toolExecutions,
-    draft,
-    isStreaming,
-    setSessions,
-    setCurrentSession,
-    setMessages,
-    setDraft,
-    applyRunStarted,
-    applyToolStarted,
-    applyToolCompleted,
-    applyToolFailed,
-    applyTextDelta,
-    applyRunCompleted,
-    applyRunFailed
-  } = useChatStore();
+  const [messages, setMessages] = useState<UIMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { sessions, currentSessionId, setSessions, setCurrentSession, upsertSession } = useChatStore();
+
+  const headers = useMemo(
+    () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
+    [accessToken]
+  );
+
+  const { append, messages: liveMessages, setMessages: setLiveMessages, status } = useChat({
+    api: getChatStreamUrl(),
+    headers,
+    streamProtocol: 'data',
+    experimental_prepareRequestBody({ messages, requestBody }) {
+      return requestBody ?? {};
+    },
+    onResponse: async (response) => {
+      if (!response.ok) {
+        throw new Error('发送失败，请稍后重试。');
+      }
+    },
+    onFinish: async () => {
+      if (!accessToken) {
+        return;
+      }
+
+      const { sessions: nextSessions } = await listChatSessions(accessToken);
+      setSessions(nextSessions);
+      const nextCurrentSession = nextSessions.find((session) => session.id === currentSessionId) ?? nextSessions[0] ?? null;
+      if (nextCurrentSession) {
+        setCurrentSession(nextCurrentSession.id);
+        upsertSession(nextCurrentSession);
+      }
+    },
+    onError: (error) => {
+      setErrorMessage(error.message || '发送失败，请稍后重试。');
+    }
+  });
+
+  useEffect(() => {
+    setMessages(liveMessages);
+  }, [liveMessages]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -50,67 +82,47 @@ export function ChatPage() {
   }, [accessToken, requestedSessionId, setCurrentSession, setSessions]);
 
   useEffect(() => {
-    if (!accessToken || !currentSessionId || messages.length > 0) {
+    if (!accessToken || !currentSessionId) {
+      setMessages([]);
+      setLiveMessages([]);
       return;
     }
 
-    getChatMessages(accessToken, currentSessionId).then(({ messages }) => {
-      setMessages(messages);
+    getChatMessages(accessToken, currentSessionId).then((timeline) => {
+      const nextMessages = createUiMessagesFromTimeline(timeline);
+      setMessages(nextMessages);
+      setLiveMessages(nextMessages);
+      upsertSession(timeline.session);
     });
-  }, [accessToken, currentSessionId, messages.length, setMessages]);
+  }, [accessToken, currentSessionId, setLiveMessages, upsertSession]);
 
   async function handleSubmit() {
-    if (!accessToken || !draft.trim() || isStreaming) {
+    if (!accessToken || !input.trim() || status === 'submitted' || status === 'streaming') {
       return;
     }
 
-    try {
-      await streamChatMessage(
-        accessToken,
-        {
-          content: draft.trim(),
+    setErrorMessage(null);
+
+    const content = input.trim();
+    setInput('');
+
+    await append(
+      {
+        role: 'user',
+        content,
+        parts: [{ type: 'text', text: content }]
+      },
+      {
+        body: createChatRequestBody({
+          content,
           sessionId: currentSessionId ?? undefined
-        },
-        (event) => {
-          if (event.type === 'run_started') {
-            applyRunStarted(event.session, event.userMessage);
-            return;
-          }
-
-          if (event.type === 'tool_started') {
-            applyToolStarted(event.toolExecution);
-            return;
-          }
-
-          if (event.type === 'tool_completed') {
-            applyToolCompleted(event.toolExecution);
-            return;
-          }
-
-          if (event.type === 'tool_failed') {
-            applyToolFailed(event.toolExecution);
-            return;
-          }
-
-          if (event.type === 'text_delta') {
-            applyTextDelta(event.delta);
-            return;
-          }
-
-          if (event.type === 'run_completed') {
-            applyRunCompleted(event.session, event.message);
-            return;
-          }
-
-          if (event.type === 'run_failed') {
-            applyRunFailed(event.message);
-          }
-        }
-      );
-    } catch {
-      applyRunFailed('发送失败，请稍后重试。');
-    }
+        })
+      }
+    );
   }
+
+  const isStreaming = status === 'submitted' || status === 'streaming';
+  const hasMessages = messages.length > 0;
 
   return (
     <AppShell
@@ -121,6 +133,8 @@ export function ChatPage() {
           onNewChat={() => {
             setCurrentSession(null);
             setMessages([]);
+            setLiveMessages([]);
+            setErrorMessage(null);
           }}
           onSelect={setCurrentSession}
         />
@@ -129,12 +143,11 @@ export function ChatPage() {
       <Card className="p-4">
         <h1 className="text-xl font-semibold">Chat</h1>
       </Card>
-      {messages.length === 0 && toolExecutions.length === 0 ? (
-        <EmptyChatState />
-      ) : (
-        <MessageList messages={messages} toolExecutions={toolExecutions} />
-      )}
-      <ChatComposer value={draft} disabled={isStreaming} onChange={setDraft} onSubmit={handleSubmit} />
+      {!hasMessages ? <EmptyChatState /> : <MessageList messages={messages} />}
+      {errorMessage ? (
+        <Card className="border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-200">{errorMessage}</Card>
+      ) : null}
+      <ChatComposer value={input} disabled={isStreaming || !accessToken} onChange={setInput} onSubmit={handleSubmit} />
     </AppShell>
   );
 }
