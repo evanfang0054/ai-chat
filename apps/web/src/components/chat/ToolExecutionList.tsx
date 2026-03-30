@@ -9,7 +9,7 @@ export function ToolExecutionList({ toolExecutions }: { toolExecutions: ToolExec
   return (
     <div className="space-y-3">
       {toolExecutions.map((toolExecution) => (
-        <ToolExecutionItem key={toolExecution.id} toolExecution={toolExecution} />
+        <ToolExecutionItem key={toolExecution.id} execution={toolExecution} />
       ))}
     </div>
   );

@@ -25,7 +25,7 @@ describe('SchedulesPage', () => {
       </ThemeProvider>
     );
 
-    expect(await screen.findByText(/login/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Welcome to AI Chat/i)).toBeInTheDocument();
   });
 
   it('renders schedule page shell heading', async () => {

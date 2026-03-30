@@ -36,7 +36,7 @@ export function ChatPage() {
     api: getChatStreamUrl(),
     headers,
     streamProtocol: 'data',
-    experimental_prepareRequestBody({ messages, requestBody }) {
+    experimental_prepareRequestBody({ messages: _messages, requestBody }) {
       return requestBody ?? {};
     },
     onResponse: async (response) => {

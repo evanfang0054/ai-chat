@@ -1,14 +1,13 @@
-import type { ToolExecution } from '@ai-chat/shared';
+import type { ToolExecutionSummary } from '@ai-chat/shared';
 import { Badge, Card } from '../ui';
 
-const statusVariant: Record<ToolExecution['status'], 'neutral' | 'success' | 'warning' | 'error'> = {
-  PENDING: 'neutral',
+const statusVariant: Record<ToolExecutionSummary['status'], 'success' | 'warning' | 'error'> = {
   RUNNING: 'warning',
-  SUCCESS: 'success',
+  SUCCEEDED: 'success',
   FAILED: 'error'
 };
 
-export function ToolExecutionItem({ execution }: { execution: ToolExecution }) {
+export function ToolExecutionItem({ execution }: { execution: ToolExecutionSummary }) {
   return (
     <Card className="p-4 bg-[rgb(var(--surface-muted))]">
       <div className="flex items-start gap-3">
@@ -23,10 +22,13 @@ export function ToolExecutionItem({ execution }: { execution: ToolExecution }) {
             <span className="text-sm font-medium text-[rgb(var(--foreground))]">{execution.toolName}</span>
             <Badge variant={statusVariant[execution.status]}>{execution.status}</Badge>
           </div>
-          {execution.result && (
+          {execution.output && (
             <pre className="mt-2 overflow-x-auto rounded-md bg-[rgb(var(--background))] p-3 text-xs text-[rgb(var(--foreground-secondary))]">
-              {JSON.stringify(execution.result, null, 2)}
+              {execution.output}
             </pre>
+          )}
+          {execution.errorMessage && (
+            <div className="mt-2 text-sm text-[rgb(var(--error))]">{execution.errorMessage}</div>
           )}
         </div>
       </div>
