@@ -8,6 +8,7 @@ import * as chatService from '../services/chat';
 import { router } from '../router';
 import { useAuthStore } from '../stores/auth-store';
 import { useChatStore } from '../stores/chat-store';
+import { ThemeProvider } from '../contexts/theme-context';
 
 const useChatMock = vi.hoisted(() => {
   return {
@@ -146,7 +147,11 @@ afterEach(async () => {
 describe('ChatPage', () => {
   it('redirects /chat to /login when unauthenticated', async () => {
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText(/login/i)).toBeInTheDocument();
   });
@@ -156,7 +161,11 @@ describe('ChatPage', () => {
     vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({ sessions: [] });
 
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText('开始一个新的对话')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/chat');
@@ -174,7 +183,11 @@ describe('ChatPage', () => {
     vi.spyOn(chatService, 'getChatMessages').mockResolvedValue(createTimeline('session-1', 'Hello AI', 'Hi there'));
 
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     await screen.findByText('开始一个新的对话');
     await userEvent.type(screen.getByRole('textbox'), 'Hello AI');
@@ -206,7 +219,11 @@ describe('ChatPage', () => {
     vi.spyOn(chatService, 'getChatMessages').mockResolvedValue(createTimeline('session-1', 'Hello AI', 'Hi there'));
 
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     await screen.findByText('开始一个新的对话');
     await userEvent.type(screen.getByRole('textbox'), 'Hello AI');
@@ -229,7 +246,11 @@ describe('ChatPage', () => {
       .mockImplementation(async (_token, sessionId) => createTimeline(sessionId, sessionId === 'session-2' ? 'Loaded requested session' : 'Loaded default session'));
 
     await router.navigate('/chat?sessionId=session-2');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText('Loaded requested session')).toBeInTheDocument();
     expect(getChatMessages).toHaveBeenCalledWith('token-123', 'session-2');
@@ -247,7 +268,11 @@ describe('ChatPage', () => {
       .mockImplementation(async (_token, sessionId) => createTimeline(sessionId, sessionId === 'session-2' ? 'Loaded session two' : 'Loaded session one'));
 
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText('Loaded session one')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Session Two' }));
@@ -265,7 +290,11 @@ describe('ChatPage', () => {
     vi.spyOn(chatService, 'getChatMessages').mockResolvedValue(createTimeline('session-1', 'Loaded from API'));
 
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText('Loaded from API')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'New Chat' }));
@@ -283,7 +312,11 @@ describe('ChatPage', () => {
     vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({ sessions: [] });
 
     await router.navigate('/chat');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     await screen.findByText('开始一个新的对话');
     await userEvent.type(screen.getByRole('textbox'), 'Hello AI');

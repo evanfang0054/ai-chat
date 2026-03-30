@@ -7,6 +7,7 @@ import { RouterProvider } from 'react-router-dom';
 import * as scheduleService from '../services/schedule';
 import { router } from '../router';
 import { useAuthStore } from '../stores/auth-store';
+import { ThemeProvider } from '../contexts/theme-context';
 
 afterEach(async () => {
   cleanup();
@@ -18,7 +19,11 @@ afterEach(async () => {
 describe('RunsPage', () => {
   it('redirects /runs to /login when unauthenticated', async () => {
     await router.navigate('/runs');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText(/login/i)).toBeInTheDocument();
   });
@@ -118,7 +123,11 @@ describe('RunsPage', () => {
     }));
 
     await router.navigate('/runs');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText('Morning brief')).toBeInTheDocument();
     expect(await screen.findByText('Run Details')).toBeInTheDocument();

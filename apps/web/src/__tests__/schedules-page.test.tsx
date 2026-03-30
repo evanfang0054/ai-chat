@@ -7,6 +7,7 @@ import { RouterProvider } from 'react-router-dom';
 import * as scheduleService from '../services/schedule';
 import { router } from '../router';
 import { useAuthStore } from '../stores/auth-store';
+import { ThemeProvider } from '../contexts/theme-context';
 
 afterEach(async () => {
   cleanup();
@@ -18,7 +19,11 @@ afterEach(async () => {
 describe('SchedulesPage', () => {
   it('redirects /schedules to /login when unauthenticated', async () => {
     await router.navigate('/schedules');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText(/login/i)).toBeInTheDocument();
   });
@@ -37,7 +42,11 @@ describe('SchedulesPage', () => {
     vi.spyOn(scheduleService, 'listSchedules').mockResolvedValue({ schedules: [] });
 
     await router.navigate('/schedules');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByRole('heading', { level: 1, name: /schedules/i })).toBeInTheDocument();
   });
@@ -56,7 +65,11 @@ describe('SchedulesPage', () => {
     vi.spyOn(scheduleService, 'listSchedules').mockResolvedValue({ schedules: [] });
 
     await router.navigate('/schedules');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByLabelText(/title/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/task prompt/i)).toBeInTheDocument();
@@ -131,7 +144,11 @@ describe('SchedulesPage', () => {
     });
 
     await router.navigate('/schedules');
-    render(<RouterProvider router={router} />);
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
 
     expect(await screen.findByText('Existing schedule')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/chat');
