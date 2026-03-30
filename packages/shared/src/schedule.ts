@@ -1,4 +1,4 @@
-export type ScheduleType = 'CRON' | 'ONE_TIME';
+export type ScheduleType = 'CRON' | 'ONE_TIME' | 'INTERVAL';
 
 export type ScheduleRunStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 
@@ -17,16 +17,25 @@ interface ScheduleSummaryBase {
 export type CronScheduleSummary = ScheduleSummaryBase & {
   type: 'CRON';
   cronExpr: string;
+  intervalMs: null;
   runAt: null;
 };
 
 export type OneTimeScheduleSummary = ScheduleSummaryBase & {
   type: 'ONE_TIME';
   cronExpr: null;
+  intervalMs: null;
   runAt: string;
 };
 
-export type ScheduleSummary = CronScheduleSummary | OneTimeScheduleSummary;
+export type IntervalScheduleSummary = ScheduleSummaryBase & {
+  type: 'INTERVAL';
+  cronExpr: null;
+  intervalMs: number;
+  runAt: null;
+};
+
+export type ScheduleSummary = CronScheduleSummary | OneTimeScheduleSummary | IntervalScheduleSummary;
 
 export interface ScheduleReference {
   id: string;
@@ -88,6 +97,7 @@ export type CreateScheduleRequest =
       taskPrompt: string;
       type: 'CRON';
       cronExpr: string;
+      intervalMs?: never;
       runAt?: never;
       timezone?: string;
     }
@@ -96,7 +106,17 @@ export type CreateScheduleRequest =
       taskPrompt: string;
       type: 'ONE_TIME';
       cronExpr?: never;
+      intervalMs?: never;
       runAt: string;
+      timezone?: string;
+    }
+  | {
+      title: string;
+      taskPrompt: string;
+      type: 'INTERVAL';
+      cronExpr?: never;
+      intervalMs: number;
+      runAt?: never;
       timezone?: string;
     };
 
@@ -110,6 +130,7 @@ interface UpdateScheduleRequestBase {
 export type UpdateScheduleRequest = UpdateScheduleRequestBase & {
   type?: ScheduleType;
   cronExpr?: string;
+  intervalMs?: number;
   runAt?: string;
 };
 
