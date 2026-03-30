@@ -77,8 +77,9 @@ export function SchedulesPage() {
 
   return (
     <AppShell>
-      <Card className="mb-4 p-4">
-        <h1 className="text-xl font-semibold">Schedules</h1>
+      <Card className="p-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-[rgb(var(--foreground))]">Schedules</h1>
+        <p className="mt-1 text-sm text-[rgb(var(--foreground-secondary))]">管理定时任务</p>
       </Card>
       <ScheduleForm onSubmit={handleCreate} />
       {editingSchedule && (

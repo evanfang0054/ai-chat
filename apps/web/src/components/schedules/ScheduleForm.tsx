@@ -87,9 +87,11 @@ export function ScheduleForm(props: {
   }
 
   return (
-    <Card className="mb-4 p-4">
-      <form className="space-y-3" onSubmit={handleSubmit}>
-        <h2 className="text-lg font-semibold">{props.initial ? 'Edit Schedule' : 'Create Schedule'}</h2>
+    <Card className="p-6">
+      <h2 className="text-lg font-semibold text-[rgb(var(--foreground))] mb-4">
+        {props.initial ? 'Edit Schedule' : 'Create Schedule'}
+      </h2>
+      <form className="space-y-4" onSubmit={handleSubmit}>
         <div>
           <label className="block text-sm font-medium text-slate-200">
             Title
