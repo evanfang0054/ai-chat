@@ -189,6 +189,21 @@ describe('ChatController (e2e)', () => {
       .expect(400);
   });
 
+  it('POST /chat/stream returns 401 when token user no longer exists', async () => {
+    const user = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({ email: 'deleted-user@example.com', password: 'password123' })
+      .expect(201);
+
+    await prisma.user.delete({ where: { id: user.body.user.id } });
+
+    await request(app.getHttpServer())
+      .post('/chat/stream')
+      .set('Authorization', `Bearer ${user.body.accessToken}`)
+      .send({ content: 'Hello after deletion' })
+      .expect(401);
+  });
+
   it('POST /chat/stream creates a session, streams tool and assistant output, and saves messages', async () => {
     agentService.streamChatReply.mockImplementation(() =>
       createStream(

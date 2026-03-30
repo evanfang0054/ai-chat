@@ -92,17 +92,10 @@ export class ScheduleService {
       title: input.title ?? existing.title,
       taskPrompt: input.taskPrompt ?? existing.taskPrompt,
       type: nextType,
-      cronExpr:
-        nextType === 'CRON'
-          ? input.type === 'CRON'
-            ? input.cronExpr
-            : input.cronExpr ?? existing.cronExpr
-          : undefined,
+      cronExpr: nextType === 'CRON' ? input.cronExpr ?? existing.cronExpr ?? undefined : undefined,
       runAt:
         nextType === 'ONE_TIME'
-          ? input.type === 'ONE_TIME'
-            ? input.runAt
-            : input.runAt ?? existing.runAt?.toISOString()
+          ? input.runAt ?? existing.runAt?.toISOString() ?? undefined
           : undefined,
       timezone: input.timezone ?? existing.timezone,
       enabled: input.enabled ?? existing.enabled

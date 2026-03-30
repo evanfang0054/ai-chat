@@ -1,7 +1,8 @@
 import type {
   ToolExecutionFailedSummary,
   ToolExecutionRunningSummary,
-  ToolExecutionSucceededSummary
+  ToolExecutionSucceededSummary,
+  ToolName
 } from '@ai-chat/shared';
 
 export interface AgentHistoryMessage {
@@ -9,11 +10,17 @@ export interface AgentHistoryMessage {
   content: string;
 }
 
+export interface ForcedToolCall {
+  name: ToolName;
+  input: Record<string, unknown>;
+}
+
 export interface StreamChatReplyInput {
   userId: string;
   sessionId: string;
   history: AgentHistoryMessage[];
   prompt: string;
+  forcedToolCall?: ForcedToolCall;
 }
 
 export type AgentStreamEvent =

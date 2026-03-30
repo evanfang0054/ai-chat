@@ -5,6 +5,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { AgentService } from '../agent/agent.service';
 import { computeNextRunAt } from './schedule.utils';
 
+const FORCE_GET_CURRENT_TIME_PATTERNS = [/\bget_current_time\b/i, /当前时间/i, /current time/i];
+
 interface ScheduleRecord {
   id: string;
   userId: string;
@@ -101,7 +103,8 @@ export class ScheduleRunnerService {
         userId: schedule.userId,
         sessionId: session.id,
         history: [],
-        prompt: schedule.taskPrompt
+        prompt: schedule.taskPrompt,
+        forcedToolCall: this.buildForcedToolCall(schedule.taskPrompt)
       })) {
         if (event.type === 'text_delta') {
           assistantText += event.delta;
@@ -129,5 +132,16 @@ export class ScheduleRunnerService {
         }
       });
     }
+  }
+
+  private buildForcedToolCall(taskPrompt: string) {
+    if (!FORCE_GET_CURRENT_TIME_PATTERNS.some((pattern) => pattern.test(taskPrompt))) {
+      return undefined;
+    }
+
+    return {
+      name: 'get_current_time' as const,
+      input: { timezone: 'UTC' }
+    };
   }
 }

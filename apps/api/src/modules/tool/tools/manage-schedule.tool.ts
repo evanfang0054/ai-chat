@@ -132,3 +132,4 @@ export class ManageScheduleTool implements ToolDefinition<ManageScheduleToolInpu
     return this.scheduleService.disableSchedule(context.userId, requireString(input.scheduleId, 'scheduleId'));
   }
 }
+

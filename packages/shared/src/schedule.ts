@@ -107,24 +107,11 @@ interface UpdateScheduleRequestBase {
   enabled?: boolean;
 }
 
-export type UpdateScheduleRequest = UpdateScheduleRequestBase &
-  (
-    | {
-        type?: undefined;
-        cronExpr?: string;
-        runAt?: string;
-      }
-    | {
-        type: 'CRON';
-        cronExpr: string;
-        runAt?: never;
-      }
-    | {
-        type: 'ONE_TIME';
-        cronExpr?: never;
-        runAt: string;
-      }
-  );
+export type UpdateScheduleRequest = UpdateScheduleRequestBase & {
+  type?: ScheduleType;
+  cronExpr?: string;
+  runAt?: string;
+};
 
 export interface ListSchedulesResponse {
   schedules: ScheduleSummary[];

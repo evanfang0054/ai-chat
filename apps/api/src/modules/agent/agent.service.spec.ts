@@ -52,8 +52,8 @@ describe('AgentService', () => {
     expect(events).toEqual([{ type: 'text_delta', delta: 'Hello world' }, { type: 'run_completed' }]);
   });
 
-  it('throws when the model returns no text and no tool output', async () => {
-    const invoke = jest.fn().mockResolvedValue({ content: '', tool_calls: [] });
+  it('prepends the tool-usage system prompt before chat history', async () => {
+    const invoke = jest.fn().mockResolvedValue({ content: 'Hello world', tool_calls: [] });
     const bindTools = jest.fn().mockReturnValue({ invoke });
     const llmService = {
       createChatModel: jest.fn().mockReturnValue({ bindTools })
@@ -67,19 +67,65 @@ describe('AgentService', () => {
     const { AgentService } = await import('./agent.service');
     const service = new AgentService(llmService as never, toolService as never);
 
-    await expect(
-      (async () => {
-        for await (const _event of service.streamChatReply({
-          userId: 'user-1',
-          sessionId: 'session-1',
-          history: [],
-          prompt: 'Ping'
-        })) {
-          // drain
-        }
-      })()
-    ).rejects.toThrow('Agent response was empty');
+    for await (const _event of service.streamChatReply({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [{ role: 'USER', content: 'Hi' }],
+      prompt: 'Create a schedule for me'
+    })) {
+      // drain
+    }
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining('If the user asks you to perform an action that matches an available tool')
+        })
+      ])
+    );
   });
+  it('guides the model to infer structured schedule arguments for natural-language schedule requests', async () => {
+    const invoke = jest.fn().mockResolvedValue({ content: 'ok', tool_calls: [] });
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([
+        { name: 'manage_schedule', description: 'Create, list, update, enable, or disable schedules.' }
+      ]),
+      getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
+      startToolExecution: jest.fn()
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+
+    for await (const _event of service.streamChatReply({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [{ role: 'USER', content: 'Hi' }],
+      prompt: '请帮我创建一个每10秒执行一次的定时任务，任务内容是调用 get_current_time。'
+    })) {
+      // drain
+    }
+
+    expect(bindTools).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ tool_choice: 'auto' })
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining('translate phrases like "every 10 seconds"')
+        }),
+        expect.objectContaining({
+          content: expect.stringContaining('create a short title instead of asking for one')
+        })
+      ])
+    );
+  });
+
 
   it('emits the tool-success event sequence for a LangChain tool call', async () => {
     const toolStartedExecution = {
@@ -144,6 +190,68 @@ describe('AgentService', () => {
       { type: 'tool_started', toolExecution: toolStartedExecution },
       { type: 'tool_completed', toolExecution: toolCompletedExecution },
       { type: 'text_delta', delta: 'The current UTC time is 2026-03-26T12:00:00.000Z.' },
+      { type: 'run_completed' }
+    ]);
+  });
+
+  it('ignores model text content after a successful tool call', async () => {
+    const toolStartedExecution = {
+      id: 'tool-execution-1',
+      sessionId: 'session-1',
+      toolName: 'manage_schedule',
+      status: 'RUNNING' as const,
+      input: '{"action":"create"}',
+      output: null,
+      errorMessage: null,
+      startedAt: '2026-03-26T12:00:00.000Z',
+      finishedAt: null
+    };
+    const toolCompletedExecution = {
+      ...toolStartedExecution,
+      status: 'SUCCEEDED' as const,
+      output: '{"action":"create","schedule":{"id":"schedule-1"}}',
+      finishedAt: '2026-03-26T12:00:01.000Z'
+    };
+    const invoke = jest.fn().mockResolvedValue({
+      content: '我理解您想要创建一个每10秒执行一次的定时任务,不过还需要更多说明。',
+      tool_calls: [{ name: 'manage_schedule', args: { action: 'create' } }]
+    });
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const run = jest.fn().mockResolvedValue({
+      execution: toolCompletedExecution,
+      outputText: toolCompletedExecution.output
+    });
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([
+        { name: 'manage_schedule', description: 'Create, list, update, enable, or disable schedules.' }
+      ]),
+      getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
+      startToolExecution: jest.fn().mockResolvedValue({
+        execution: toolStartedExecution,
+        run
+      })
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+    const events: AgentStreamEvent[] = [];
+
+    for await (const event of service.streamChatReply({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [{ role: 'USER', content: 'Hi' }],
+      prompt: '每10秒创建一个定时任务'
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'tool_started', toolExecution: toolStartedExecution },
+      { type: 'tool_completed', toolExecution: toolCompletedExecution },
+      { type: 'text_delta', delta: toolCompletedExecution.output },
       { type: 'run_completed' }
     ]);
   });
