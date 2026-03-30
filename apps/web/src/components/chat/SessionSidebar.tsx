@@ -10,8 +10,11 @@ export function SessionSidebar(props: {
 }) {
   return (
     <aside className="w-full max-w-xs shrink-0">
-      <Card className="space-y-3 p-3">
+      <Card className="space-y-4 p-4">
         <Button className="w-full" onClick={props.onNewChat}>
+          <svg className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
           New Chat
         </Button>
         <SessionList

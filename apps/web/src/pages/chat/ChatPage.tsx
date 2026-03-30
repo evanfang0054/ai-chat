@@ -140,12 +140,20 @@ export function ChatPage() {
         />
       }
     >
-      <Card className="p-4">
-        <h1 className="text-xl font-semibold">Chat</h1>
+      <Card className="p-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-[rgb(var(--foreground))]">Chat</h1>
+        <p className="mt-1 text-sm text-[rgb(var(--foreground-secondary))]">与 AI 助手对话</p>
       </Card>
       {!hasMessages ? <EmptyChatState /> : <MessageList messages={messages} />}
       {errorMessage ? (
-        <Card className="border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-200">{errorMessage}</Card>
+        <Card className="border-[rgb(var(--error)/0.3)] bg-[rgb(var(--error)/0.05)] p-4">
+          <div className="flex items-start gap-3">
+            <svg className="h-5 w-5 text-[rgb(var(--error))] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-sm text-[rgb(var(--error))]">{errorMessage}</span>
+          </div>
+        </Card>
       ) : null}
       <ChatComposer value={input} disabled={isStreaming || !accessToken} onChange={setInput} onSubmit={handleSubmit} />
     </AppShell>

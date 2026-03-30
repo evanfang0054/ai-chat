@@ -13,17 +13,23 @@ export function ChatComposer(props: {
   };
 
   return (
-    <form className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4" onSubmit={handleSubmit}>
-      <Textarea
-        rows={4}
-        value={props.value}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button disabled={props.disabled} type="submit">
-          Send
-        </Button>
+    <form className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-4 shadow-sm" onSubmit={handleSubmit}>
+      <div className="space-y-3">
+        <Textarea
+          rows={4}
+          value={props.value}
+          disabled={props.disabled}
+          onChange={(event) => props.onChange(event.target.value)}
+          placeholder="输入消息..."
+        />
+        <div className="flex justify-end">
+          <Button disabled={props.disabled || !props.value.trim()} type="submit">
+            <svg className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
+            Send
+          </Button>
+        </div>
       </div>
     </form>
   );
