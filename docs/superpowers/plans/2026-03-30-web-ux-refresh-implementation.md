@@ -1088,3 +1088,90 @@ git commit -m "chore(web): final UX refresh adjustments"
 - [ ] Build succeeds
 - [ ] Browser verification complete
 
+---
+
+## Task 12: E2E Browser Verification
+
+**Required Sub-Skill:** Use `agent-browser` skill for real browser testing
+
+**Files:**
+- All implemented pages and components
+
+- [ ] **Step 1: Start dev server**
+
+Run: `pnpm --filter @ai-chat/web dev`
+Expected: Dev server starts on port 5170 (or next available)
+
+- [ ] **Step 2: Invoke agent-browser skill**
+
+Use agent-browser to verify:
+
+1. **Login Flow**
+   - Navigate to http://localhost:5170/login
+   - Verify welcome heading and refined card layout
+   - Check light theme is default
+   - Test theme toggle switches to dark mode
+   - Verify form inputs and button styling
+   - Test login with valid credentials
+
+2. **Theme Consistency**
+   - Toggle between light and dark themes
+   - Verify all pages maintain consistent token usage
+   - Check borders, backgrounds, text colors adapt correctly
+   - Verify no visual breaks or contrast issues
+
+3. **Chat Page**
+   - Verify empty state displays with icon and message
+   - Check session sidebar with "New Chat" button
+   - Send a test message
+   - Verify message bubbles display correctly (user vs assistant)
+   - Check tool execution cards if applicable
+   - Verify composer textarea and send button
+
+4. **Schedules Page**
+   - Navigate to /schedules
+   - Verify page header and description
+   - Check form styling and input fields
+   - Verify schedule list displays correctly
+
+5. **Runs Page**
+   - Navigate to /runs
+   - Verify page header and description
+   - Check run list with status badges
+   - Verify badge colors match status (success/error/warning)
+
+6. **Dashboard & Admin**
+   - Navigate to /dashboard
+   - Verify consistent page structure
+   - Navigate to /admin (if admin role)
+   - Verify consistent styling
+
+7. **Navigation & Shell**
+   - Test all nav links work
+   - Verify active nav state highlights correctly
+   - Check user email displays in header
+   - Verify theme toggle persists across page navigation
+   - Check responsive layout at different widths
+
+8. **Overall Polish**
+   - Verify spacing and typography consistency
+   - Check all interactive states (hover, focus, disabled)
+   - Verify no console errors
+   - Check loading states if applicable
+   - Verify error states display correctly
+
+- [ ] **Step 3: Document findings**
+
+Note any issues found during browser testing
+
+- [ ] **Step 4: Fix issues if needed**
+
+Address any visual or functional issues discovered
+
+- [ ] **Step 5: Final commit**
+
+```bash
+git add .
+git commit -m "fix(web): address e2e browser verification issues"
+```
+
