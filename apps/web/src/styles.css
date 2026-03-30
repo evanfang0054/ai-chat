@@ -1,8 +1,7 @@
-@import 'tailwindcss';
+@import './tokens.css';
 
 :root {
-  color-scheme: dark;
-  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 html,
@@ -13,11 +12,8 @@ body,
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top, rgba(69, 185, 255, 0.16), transparent 24%),
-    radial-gradient(circle at 20% 20%, rgba(66, 153, 225, 0.08), transparent 26%),
-    linear-gradient(180deg, #07090d 0%, #0d1117 42%, #0c1015 100%);
-  color: #f3f7fb;
+  background-color: rgb(var(--background));
+  color: rgb(var(--foreground));
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -40,6 +36,6 @@ select {
 }
 
 ::selection {
-  background: rgba(103, 232, 249, 0.22);
-  color: #f8fbff;
+  background: rgb(var(--accent) / 0.2);
+  color: rgb(var(--foreground));
 }
