@@ -43,8 +43,9 @@ export function RunsPage() {
 
   return (
     <AppShell>
-      <Card className="mb-4 p-4">
-        <h1 className="text-xl font-semibold">Runs</h1>
+      <Card className="p-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-[rgb(var(--foreground))]">Runs</h1>
+        <p className="mt-1 text-sm text-[rgb(var(--foreground-secondary))]">查看任务执行记录</p>
       </Card>
 
       <Card className="mb-4 space-y-3 p-4">

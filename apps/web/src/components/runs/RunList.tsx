@@ -20,7 +20,9 @@ export function RunList(props: {
               <Card className="space-y-2 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <strong className="text-base">{run.schedule.title}</strong>
-                  <Badge variant={run.status === 'SUCCEEDED' ? 'success' : 'warning'}>{run.status}</Badge>
+                  <Badge variant={run.status === 'SUCCEEDED' ? 'success' : run.status === 'FAILED' ? 'error' : 'warning'}>
+                    {run.status}
+                  </Badge>
                 </div>
                 <div className="text-sm text-slate-300">{run.taskPromptSnapshot}</div>
                 <div className="text-sm text-slate-400">
