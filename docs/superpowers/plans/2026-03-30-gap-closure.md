@@ -89,7 +89,7 @@
 Run: `pnpm --filter @ai-chat/web lint`
 Expected: lint 可执行，可能有 warning，但命令可运行。
 
-- [ ] **Step 3: 提交矩阵初版（已合并到最终收口提交）**
+- [x] **Step 3: 提交矩阵初版（已合并到最终收口提交）**
 
 ```bash
 git add docs/superpowers/plans/2026-03-30-gap-closure.md
@@ -153,7 +153,7 @@ Expected: 全部 PASS。
 Run: `pnpm --filter @ai-chat/web build`
 Expected: build SUCCESS。
 
-- [ ] **Step 6: 提交（已合并到最终收口提交）**
+- [x] **Step 6: 提交（已合并到最终收口提交）**
 
 ```bash
 git add apps/web/package.json apps/web/vite.config.ts apps/web/src/styles.css
@@ -218,7 +218,7 @@ export function Card({ className = '', ...props }: React.HTMLAttributes<HTMLDivE
 Run: `pnpm --filter @ai-chat/web test`
 Expected: PASS。
 
-- [ ] **Step 6: 提交（已合并到最终收口提交）**
+- [x] **Step 6: 提交（已合并到最终收口提交）**
 
 ```bash
 git add apps/web/src/components/ui apps/web/src/pages/schedules/SchedulesPage.tsx apps/web/src/__tests__/schedules-page.test.tsx
@@ -287,7 +287,7 @@ return (
 Run: `pnpm --filter @ai-chat/web test && pnpm --filter @ai-chat/web build`
 Expected: PASS + build SUCCESS。
 
-- [ ] **Step 6: 提交（已合并到最终收口提交）**
+- [x] **Step 6: 提交（已合并到最终收口提交）**
 
 ```bash
 git add apps/web/src/components/layout/AppShell.tsx apps/web/src/pages/login/LoginPage.tsx apps/web/src/pages/chat/ChatPage.tsx apps/web/src/pages/schedules/SchedulesPage.tsx apps/web/src/pages/runs/RunsPage.tsx
@@ -341,7 +341,7 @@ if (intentNeedsDisambiguation) {
 Run: `pnpm --filter @ai-chat/api test -- manage-schedule && pnpm --filter @ai-chat/api test:e2e -- ai-schedule-management.e2e-spec.ts`
 Expected: PASS。
 
-- [ ] **Step 5: 提交（已合并到最终收口提交）**
+- [x] **Step 5: 提交（已合并到最终收口提交）**
 
 ```bash
 git add apps/api/test/ai-schedule-management.e2e-spec.ts apps/api/src/modules/agent/agent.service.ts apps/api/src/modules/tool/tools/manage-schedule.tool.ts
@@ -396,7 +396,7 @@ Run:
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: 提交最终报告（待最终统一提交）**
+- [x] **Step 5: 提交最终报告（待最终统一提交）**
 
 ```bash
 git add docs/superpowers/plans/2026-03-30-gap-closure-report.md docs/superpowers/plans/2026-03-30-gap-closure.md
