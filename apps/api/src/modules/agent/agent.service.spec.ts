@@ -127,6 +127,78 @@ describe('AgentService', () => {
   });
 
 
+  it('requires explicit confirmation before deleting a schedule', async () => {
+    const invoke = jest.fn().mockResolvedValue({ content: 'Please confirm which schedule to delete.', tool_calls: [] });
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([
+        { name: 'manage_schedule', description: 'Manage the current user\'s schedules.' }
+      ]),
+      getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
+      startToolExecution: jest.fn()
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+
+    for await (const _event of service.streamChatReply({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [{ role: 'USER', content: 'Delete my daily summary schedule.' }],
+      prompt: 'Delete my daily summary schedule.'
+    })) {
+      // drain
+    }
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining('require an explicit user confirmation in natural language')
+        })
+      ])
+    );
+    expect(toolService.startToolExecution).not.toHaveBeenCalled();
+  });
+
+  it('guides the model to list or disambiguate ambiguous schedule targets before mutation', async () => {
+    const invoke = jest.fn().mockResolvedValue({ content: 'I found multiple matching schedules.', tool_calls: [] });
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([
+        { name: 'manage_schedule', description: 'Manage the current user\'s schedules.' }
+      ]),
+      getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
+      startToolExecution: jest.fn()
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+
+    for await (const _event of service.streamChatReply({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [{ role: 'USER', content: 'Disable my report schedule.' }],
+      prompt: 'Disable my report schedule.'
+    })) {
+      // drain
+    }
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: expect.stringContaining('prefer calling manage_schedule with action="list" first or ask a disambiguation question instead of guessing')
+        })
+      ])
+    );
+    expect(toolService.startToolExecution).not.toHaveBeenCalled();
+  });
+
   it('emits the tool-success event sequence for a LangChain tool call', async () => {
     const toolStartedExecution = {
       id: 'tool-execution-1',

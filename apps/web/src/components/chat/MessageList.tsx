@@ -10,7 +10,7 @@ export function MessageList({
   toolExecutions: ToolExecutionSummary[];
 }) {
   return (
-    <div>
+    <div className="space-y-4">
       <ToolExecutionList toolExecutions={toolExecutions} />
       {messages.map((message) => (
         <MessageItem key={message.id} message={message} />

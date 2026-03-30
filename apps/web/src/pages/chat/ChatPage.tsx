@@ -5,6 +5,7 @@ import { SessionSidebar } from '../../components/chat/SessionSidebar';
 import { MessageList } from '../../components/chat/MessageList';
 import { ChatComposer } from '../../components/chat/ChatComposer';
 import { AppShell } from '../../components/layout/AppShell';
+import { Card } from '../../components/ui';
 import { useAuthStore } from '../../stores/auth-store';
 import { useChatStore } from '../../stores/chat-store';
 import { listChatSessions, getChatMessages, streamChatMessage } from '../../services/chat';
@@ -125,6 +126,9 @@ export function ChatPage() {
         />
       }
     >
+      <Card className="p-4">
+        <h1 className="text-xl font-semibold">Chat</h1>
+      </Card>
       {messages.length === 0 && toolExecutions.length === 0 ? (
         <EmptyChatState />
       ) : (

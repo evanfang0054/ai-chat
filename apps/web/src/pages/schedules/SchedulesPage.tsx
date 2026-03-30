@@ -3,6 +3,7 @@ import type { CreateScheduleRequest, ScheduleSummary, UpdateScheduleRequest } fr
 
 import { ScheduleForm, ScheduleList } from '../../components/schedules/ScheduleForm';
 import { AppShell } from '../../components/layout/AppShell';
+import { Card } from '../../components/ui';
 import { useAuthStore } from '../../stores/auth-store';
 import {
   createSchedule,
@@ -76,7 +77,9 @@ export function SchedulesPage() {
 
   return (
     <AppShell>
-      <h1>Schedules</h1>
+      <Card className="mb-4 p-4">
+        <h1 className="text-xl font-semibold">Schedules</h1>
+      </Card>
       <ScheduleForm onSubmit={handleCreate} />
       {editingSchedule && (
         <ScheduleForm

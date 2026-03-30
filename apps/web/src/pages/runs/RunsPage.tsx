@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ScheduleRunSummary } from '@ai-chat/shared';
 
 import { AppShell } from '../../components/layout/AppShell';
+import { Card, Input } from '../../components/ui';
 import { RunList } from '../../components/runs/RunList';
 import { useAuthStore } from '../../stores/auth-store';
 import { getRun, listRuns } from '../../services/schedule';
@@ -42,39 +43,50 @@ export function RunsPage() {
 
   return (
     <AppShell>
-      <h1>Runs</h1>
-      <section>
-        <h2>Filters</h2>
-        <div>
-          <label>
-            Status
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-              <option value="">All</option>
-              <option value="PENDING">PENDING</option>
-              <option value="RUNNING">RUNNING</option>
-              <option value="SUCCEEDED">SUCCEEDED</option>
-              <option value="FAILED">FAILED</option>
-            </select>
-          </label>
-        </div>
-        <div>
-          <label>
-            Schedule ID
-            <input
-              type="text"
-              value={scheduleIdFilter}
-              onChange={(event) => setScheduleIdFilter(event.target.value)}
-            />
-          </label>
-        </div>
-      </section>
-      <RunList runs={runs} currentRunId={currentRunId} onSelect={setCurrentRunId} />
-      <section>
-        <h2>Run Details</h2>
-        {!selectedRun ? (
-          <p>Select a run to inspect.</p>
-        ) : (
+      <Card className="mb-4 p-4">
+        <h1 className="text-xl font-semibold">Runs</h1>
+      </Card>
+
+      <Card className="mb-4 space-y-3 p-4">
+        <h2 className="text-base font-semibold">Filters</h2>
+        <div className="flex flex-wrap gap-4">
           <div>
+            <label className="block text-sm font-medium text-slate-200">
+              Status
+              <select
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+              >
+                <option value="">All</option>
+                <option value="PENDING">PENDING</option>
+                <option value="RUNNING">RUNNING</option>
+                <option value="SUCCEEDED">SUCCEEDED</option>
+                <option value="FAILED">FAILED</option>
+              </select>
+            </label>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-200">
+              Schedule ID
+              <Input
+                className="mt-1"
+                value={scheduleIdFilter}
+                onChange={(event) => setScheduleIdFilter(event.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+      </Card>
+
+      <RunList runs={runs} currentRunId={currentRunId} onSelect={setCurrentRunId} />
+
+      <Card className="p-4">
+        <h2 className="mb-3 text-base font-semibold">Run Details</h2>
+        {!selectedRun ? (
+          <p className="text-sm text-slate-300">Select a run to inspect.</p>
+        ) : (
+          <div className="space-y-2 text-sm">
             <div>Run ID: {selectedRun.id}</div>
             <div>Schedule ID: {selectedRun.scheduleId}</div>
             <div>Chat Session ID: {selectedRun.chatSessionId ?? '—'}</div>
@@ -83,10 +95,12 @@ export function RunsPage() {
             <div>Started: {selectedRun.startedAt ?? '—'}</div>
             <div>Finished: {selectedRun.finishedAt ?? '—'}</div>
             <div>Result: {selectedRun.resultSummary ?? '—'}</div>
-            <div>Error: {selectedRun.errorMessage ?? '—'}</div>
+            <div className={selectedRun.errorMessage ? 'text-rose-300' : 'text-slate-100'}>
+              Error: {selectedRun.errorMessage ?? '—'}
+            </div>
           </div>
         )}
-      </section>
+      </Card>
     </AppShell>
   );
 }

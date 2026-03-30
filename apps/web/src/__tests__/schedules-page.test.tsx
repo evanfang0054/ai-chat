@@ -23,6 +23,45 @@ describe('SchedulesPage', () => {
     expect(await screen.findByText(/login/i)).toBeInTheDocument();
   });
 
+  it('renders schedule page shell heading', async () => {
+    useAuthStore.getState().setAuth({
+      accessToken: 'token-123',
+      user: {
+        id: 'user-1',
+        email: 'user@example.com',
+        role: 'USER',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString()
+      }
+    });
+    vi.spyOn(scheduleService, 'listSchedules').mockResolvedValue({ schedules: [] });
+
+    await router.navigate('/schedules');
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: /schedules/i })).toBeInTheDocument();
+  });
+
+  it('keeps form controls accessible by label', async () => {
+    useAuthStore.getState().setAuth({
+      accessToken: 'token-123',
+      user: {
+        id: 'user-1',
+        email: 'user@example.com',
+        role: 'USER',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString()
+      }
+    });
+    vi.spyOn(scheduleService, 'listSchedules').mockResolvedValue({ schedules: [] });
+
+    await router.navigate('/schedules');
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByLabelText(/title/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/task prompt/i)).toBeInTheDocument();
+  });
+
   it('loads schedules, creates a one-time schedule, edits an existing schedule, and deletes it', async () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token-123',
