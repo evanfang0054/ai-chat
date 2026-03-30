@@ -7,12 +7,12 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const baseClassName =
-  'inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60';
+  'inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-focus))] focus-visible:ring-offset-2';
 
 const variantClassName: Record<ButtonVariant, string> = {
-  primary: 'bg-cyan-500 text-slate-950 hover:bg-cyan-400',
-  secondary: 'bg-slate-800 text-slate-100 hover:bg-slate-700',
-  danger: 'bg-rose-500 text-white hover:bg-rose-400'
+  primary: 'bg-[rgb(var(--accent))] text-white hover:bg-[rgb(var(--accent-hover))]',
+  secondary: 'bg-[rgb(var(--surface-muted))] text-[rgb(var(--foreground))] hover:bg-[rgb(var(--border-active))] border border-[rgb(var(--border))]',
+  danger: 'bg-[rgb(var(--error))] text-white hover:opacity-90'
 };
 
 export function Button({ className = '', variant = 'primary', ...props }: ButtonProps) {

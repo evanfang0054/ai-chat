@@ -1,15 +1,16 @@
 import type { HTMLAttributes } from 'react';
 
-type BadgeVariant = 'neutral' | 'success' | 'warning';
+type BadgeVariant = 'neutral' | 'success' | 'warning' | 'error';
 
 type BadgeProps = HTMLAttributes<HTMLSpanElement> & {
   variant?: BadgeVariant;
 };
 
 const variantClassName: Record<BadgeVariant, string> = {
-  neutral: 'bg-slate-800 text-slate-200',
-  success: 'bg-emerald-500/20 text-emerald-200',
-  warning: 'bg-amber-500/20 text-amber-200'
+  neutral: 'bg-[rgb(var(--surface-muted))] text-[rgb(var(--foreground-secondary))] border border-[rgb(var(--border))]',
+  success: 'bg-[rgb(var(--success)/0.1)] text-[rgb(var(--success))] border border-[rgb(var(--success)/0.2)]',
+  warning: 'bg-[rgb(var(--warning)/0.1)] text-[rgb(var(--warning))] border border-[rgb(var(--warning)/0.2)]',
+  error: 'bg-[rgb(var(--error)/0.1)] text-[rgb(var(--error))] border border-[rgb(var(--error)/0.2)]'
 };
 
 export function Badge({ className = '', variant = 'neutral', ...props }: BadgeProps) {
