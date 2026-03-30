@@ -9,8 +9,9 @@ const manageScheduleToolSchema = z.object({
   scheduleId: z.string().trim().min(1).nullable(),
   title: z.string().trim().min(1).nullable(),
   taskPrompt: z.string().trim().min(1).nullable(),
-  type: z.enum(['CRON', 'ONE_TIME']).nullable(),
+  type: z.enum(['CRON', 'ONE_TIME', 'INTERVAL']).nullable(),
   cronExpr: z.string().trim().min(1).nullable(),
+  intervalMs: z.number().int().min(1000).nullable(),
   runAt: z.string().datetime({ offset: true }).nullable(),
   timezone: z.string().trim().min(1).nullable(),
   enabled: z.boolean().nullable()
@@ -26,7 +27,7 @@ function requireString(value: string | null, field: string) {
   return value;
 }
 
-function requireType(value: 'CRON' | 'ONE_TIME' | null) {
+function requireType(value: 'CRON' | 'ONE_TIME' | 'INTERVAL' | null) {
   if (!value) {
     throw new Error('type is required');
   }
@@ -43,6 +44,20 @@ function toCreateRequest(input: ManageScheduleToolInput): CreateScheduleRequest 
       taskPrompt: requireString(input.taskPrompt, 'taskPrompt'),
       type: 'CRON',
       cronExpr: requireString(input.cronExpr, 'cronExpr'),
+      timezone: input.timezone ?? undefined
+    };
+  }
+
+  if (type === 'INTERVAL') {
+    if (!input.intervalMs || input.intervalMs < 1000) {
+      throw new Error('intervalMs must be at least 1000 for INTERVAL schedules');
+    }
+
+    return {
+      title: requireString(input.title, 'title'),
+      taskPrompt: requireString(input.taskPrompt, 'taskPrompt'),
+      type: 'INTERVAL',
+      intervalMs: input.intervalMs,
       timezone: input.timezone ?? undefined
     };
   }
@@ -76,6 +91,17 @@ function toUpdateRequest(input: ManageScheduleToolInput): UpdateScheduleRequest 
       taskPrompt: input.taskPrompt ?? undefined,
       type: 'ONE_TIME',
       runAt: requireString(input.runAt, 'runAt'),
+      timezone: input.timezone ?? undefined,
+      enabled: input.enabled ?? undefined
+    };
+  }
+
+  if (type === 'INTERVAL') {
+    return {
+      title: input.title ?? undefined,
+      taskPrompt: input.taskPrompt ?? undefined,
+      type: 'INTERVAL',
+      intervalMs: input.intervalMs ?? undefined,
       timezone: input.timezone ?? undefined,
       enabled: input.enabled ?? undefined
     };

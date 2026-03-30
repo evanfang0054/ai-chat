@@ -22,6 +22,7 @@ export class ScheduleService {
     const nextRunAt = computeNextRunAt({
       type: input.type,
       cronExpr: input.type === 'CRON' ? input.cronExpr : undefined,
+      intervalMs: input.type === 'INTERVAL' ? input.intervalMs : undefined,
       runAt: input.type === 'ONE_TIME' ? input.runAt : undefined,
       timezone
     });
@@ -33,6 +34,7 @@ export class ScheduleService {
         taskPrompt: input.taskPrompt,
         type: input.type,
         cronExpr: input.type === 'CRON' ? input.cronExpr : null,
+        intervalMs: input.type === 'INTERVAL' ? input.intervalMs : null,
         runAt: input.type === 'ONE_TIME' ? new Date(input.runAt) : null,
         timezone,
         enabled: true,
@@ -78,13 +80,32 @@ export class ScheduleService {
       if (input.cronExpr && input.runAt) {
         throw new BadRequestException('cronExpr and runAt cannot be updated together without type');
       }
+      if (input.cronExpr && input.intervalMs) {
+        throw new BadRequestException('cronExpr and intervalMs cannot be updated together without type');
+      }
+      if (input.runAt && input.intervalMs) {
+        throw new BadRequestException('runAt and intervalMs cannot be updated together without type');
+      }
 
       if (existing.type === 'CRON' && input.runAt) {
         throw new BadRequestException('runAt is not allowed for CRON schedules');
       }
+      if (existing.type === 'CRON' && input.intervalMs) {
+        throw new BadRequestException('intervalMs is not allowed for CRON schedules');
+      }
 
       if (existing.type === 'ONE_TIME' && input.cronExpr) {
         throw new BadRequestException('cronExpr is not allowed for ONE_TIME schedules');
+      }
+      if (existing.type === 'ONE_TIME' && input.intervalMs) {
+        throw new BadRequestException('intervalMs is not allowed for ONE_TIME schedules');
+      }
+
+      if (existing.type === 'INTERVAL' && input.cronExpr) {
+        throw new BadRequestException('cronExpr is not allowed for INTERVAL schedules');
+      }
+      if (existing.type === 'INTERVAL' && input.runAt) {
+        throw new BadRequestException('runAt is not allowed for INTERVAL schedules');
       }
     }
 
@@ -92,7 +113,14 @@ export class ScheduleService {
       title: input.title ?? existing.title,
       taskPrompt: input.taskPrompt ?? existing.taskPrompt,
       type: nextType,
-      cronExpr: nextType === 'CRON' ? input.cronExpr ?? existing.cronExpr ?? undefined : undefined,
+      cronExpr:
+        nextType === 'CRON'
+          ? input.cronExpr ?? existing.cronExpr ?? undefined
+          : undefined,
+      intervalMs:
+        nextType === 'INTERVAL'
+          ? input.intervalMs ?? existing.intervalMs ?? undefined
+          : undefined,
       runAt:
         nextType === 'ONE_TIME'
           ? input.runAt ?? existing.runAt?.toISOString() ?? undefined
@@ -104,6 +132,7 @@ export class ScheduleService {
     validateScheduleInput({
       type: merged.type,
       cronExpr: merged.cronExpr,
+      intervalMs: merged.intervalMs,
       runAt: merged.runAt
     });
 
@@ -111,6 +140,7 @@ export class ScheduleService {
       ? computeNextRunAt({
           type: merged.type,
           cronExpr: merged.cronExpr,
+          intervalMs: merged.intervalMs,
           runAt: merged.runAt,
           timezone: merged.timezone
         })
@@ -123,6 +153,7 @@ export class ScheduleService {
         taskPrompt: merged.taskPrompt,
         type: merged.type,
         cronExpr: merged.type === 'CRON' ? merged.cronExpr ?? null : null,
+        intervalMs: merged.type === 'INTERVAL' ? merged.intervalMs ?? null : null,
         runAt: merged.type === 'ONE_TIME' && merged.runAt ? new Date(merged.runAt) : null,
         timezone: merged.timezone,
         enabled: merged.enabled,
@@ -138,6 +169,7 @@ export class ScheduleService {
     const nextRunAt = computeNextRunAt({
       type: schedule.type,
       cronExpr: schedule.cronExpr,
+      intervalMs: schedule.intervalMs,
       runAt: schedule.runAt?.toISOString(),
       timezone: schedule.timezone
     });
@@ -221,7 +253,7 @@ export class ScheduleService {
     schedule: {
       id: string;
       title: string;
-      type: 'CRON' | 'ONE_TIME';
+      type: 'CRON' | 'ONE_TIME' | 'INTERVAL';
     };
   }): ScheduleRunSummary {
     const summaryBase = {
@@ -301,8 +333,9 @@ export class ScheduleService {
     id: string;
     title: string;
     taskPrompt: string;
-    type: 'CRON' | 'ONE_TIME';
+    type: 'CRON' | 'ONE_TIME' | 'INTERVAL';
     cronExpr: string | null;
+    intervalMs: number | null;
     runAt: Date | null;
     timezone: string;
     enabled: boolean;
@@ -322,6 +355,29 @@ export class ScheduleService {
         taskPrompt: schedule.taskPrompt,
         type: 'CRON',
         cronExpr: schedule.cronExpr,
+        intervalMs: null,
+        runAt: null,
+        timezone: schedule.timezone,
+        enabled: schedule.enabled,
+        lastRunAt: schedule.lastRunAt,
+        nextRunAt: schedule.nextRunAt,
+        createdAt: schedule.createdAt,
+        updatedAt: schedule.updatedAt
+      };
+    }
+
+    if (schedule.type === 'INTERVAL') {
+      if (!schedule.intervalMs) {
+        throw new Error('INTERVAL schedule is missing intervalMs');
+      }
+
+      return {
+        id: schedule.id,
+        title: schedule.title,
+        taskPrompt: schedule.taskPrompt,
+        type: 'INTERVAL',
+        cronExpr: null,
+        intervalMs: schedule.intervalMs,
         runAt: null,
         timezone: schedule.timezone,
         enabled: schedule.enabled,
@@ -342,6 +398,7 @@ export class ScheduleService {
       taskPrompt: schedule.taskPrompt,
       type: 'ONE_TIME',
       cronExpr: null,
+      intervalMs: null,
       runAt: schedule.runAt,
       timezone: schedule.timezone,
       enabled: schedule.enabled,

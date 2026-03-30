@@ -13,6 +13,10 @@ export function validateScheduleInput(input: ScheduleInput) {
     if (input.cronExpr) {
       throw new BadRequestException('cronExpr is not allowed for ONE_TIME schedules');
     }
+
+    if (input.intervalMs) {
+      throw new BadRequestException('intervalMs is not allowed for ONE_TIME schedules');
+    }
   }
 
   if (input.type === 'CRON') {
@@ -23,6 +27,24 @@ export function validateScheduleInput(input: ScheduleInput) {
     if (input.runAt) {
       throw new BadRequestException('runAt is not allowed for CRON schedules');
     }
+
+    if (input.intervalMs) {
+      throw new BadRequestException('intervalMs is not allowed for CRON schedules');
+    }
+  }
+
+  if (input.type === 'INTERVAL') {
+    if (!input.intervalMs || input.intervalMs < 1000) {
+      throw new BadRequestException('intervalMs must be at least 1000ms for INTERVAL schedules');
+    }
+
+    if (input.cronExpr) {
+      throw new BadRequestException('cronExpr is not allowed for INTERVAL schedules');
+    }
+
+    if (input.runAt) {
+      throw new BadRequestException('runAt is not allowed for INTERVAL schedules');
+    }
   }
 }
 
@@ -31,6 +53,15 @@ export function computeNextRunAt(input: ScheduleComputationInput) {
 
   if (input.type === 'ONE_TIME') {
     return input.runAt ? new Date(input.runAt) : null;
+  }
+
+  if (input.type === 'INTERVAL') {
+    const intervalMs = input.intervalMs;
+    if (!intervalMs || intervalMs < 1000) {
+      throw new BadRequestException('intervalMs must be at least 1000ms for INTERVAL schedules');
+    }
+
+    return new Date((input.now ?? new Date()).getTime() + intervalMs);
   }
 
   if (!input.cronExpr) {
@@ -67,6 +98,17 @@ export function toScheduleSummary(schedule: ScheduleSummaryLike): ScheduleSummar
       ...summary,
       type: 'CRON',
       cronExpr: schedule.cronExpr,
+      intervalMs: null,
+      runAt: null
+    };
+  }
+
+  if (schedule.type === 'INTERVAL') {
+    return {
+      ...summary,
+      type: 'INTERVAL',
+      cronExpr: null,
+      intervalMs: schedule.intervalMs,
       runAt: null
     };
   }
@@ -75,6 +117,7 @@ export function toScheduleSummary(schedule: ScheduleSummaryLike): ScheduleSummar
     ...summary,
     type: 'ONE_TIME',
     cronExpr: null,
+    intervalMs: null,
     runAt: schedule.runAt.toISOString()
   };
 }

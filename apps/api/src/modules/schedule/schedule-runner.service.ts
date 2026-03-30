@@ -12,8 +12,9 @@ interface ScheduleRecord {
   userId: string;
   title: string;
   taskPrompt: string;
-  type: 'CRON' | 'ONE_TIME';
+  type: 'CRON' | 'ONE_TIME' | 'INTERVAL';
   cronExpr: string | null;
+  intervalMs: number | null;
   runAt: Date | null;
   timezone: string;
   enabled: boolean;
@@ -63,9 +64,10 @@ export class ScheduleRunnerService {
             : computeNextRunAt({
                 type: schedule.type,
                 cronExpr: schedule.cronExpr,
+                intervalMs: schedule.intervalMs,
                 runAt: schedule.runAt?.toISOString() ?? null,
                 timezone: schedule.timezone,
-                now
+                now: schedule.type === 'INTERVAL' ? (schedule.nextRunAt ?? now) : now
               })
       }
     });

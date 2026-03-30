@@ -1,7 +1,9 @@
 import type { CreateScheduleRequest, ScheduleRunStatus, ScheduleType } from '@ai-chat/shared';
 
-export type ScheduleInput = Pick<CreateScheduleRequest, 'type'> & {
+export type ScheduleInput = {
+  type: ScheduleType;
   cronExpr?: string | null;
+  intervalMs?: number | null;
   runAt?: string | null;
 };
 
@@ -36,10 +38,18 @@ export type ScheduleSummaryLike =
   | (ScheduleSummaryLikeBase & {
       type: 'CRON';
       cronExpr: string;
+      intervalMs: null;
       runAt: null;
     })
   | (ScheduleSummaryLikeBase & {
       type: 'ONE_TIME';
       cronExpr: null;
+      intervalMs: null;
       runAt: Date;
+    })
+  | (ScheduleSummaryLikeBase & {
+      type: 'INTERVAL';
+      cronExpr: null;
+      intervalMs: number;
+      runAt: null;
     });

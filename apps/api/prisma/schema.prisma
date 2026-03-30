@@ -32,6 +32,7 @@ enum ToolExecutionStatus {
 enum ScheduleType {
   CRON
   ONE_TIME
+  INTERVAL
 }
 
 enum ScheduleRunStatus {
@@ -102,6 +103,7 @@ model Schedule {
   taskPrompt String
   type       ScheduleType
   cronExpr   String?
+  intervalMs Int?
   runAt      DateTime?
   timezone   String       @default("UTC")
   enabled    Boolean      @default(true)
