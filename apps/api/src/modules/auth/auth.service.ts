@@ -1,5 +1,7 @@
+import { randomBytes, createHash } from 'node:crypto';
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { env } from '../../common/config/env';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { hashPassword, verifyPassword } from './password';
 import { LoginDto } from './dto/login.dto';
@@ -42,7 +44,32 @@ export class AuthService {
     return this.createAuthResponse(user.id, user.email, user.role, user.status, user.createdAt);
   }
 
-  private createAuthResponse(
+  async refresh(refreshToken: string) {
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    const persistedToken = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+      include: { user: true }
+    });
+
+    if (!persistedToken || persistedToken.expiresAt <= new Date()) {
+      if (persistedToken) {
+        await this.prisma.refreshToken.delete({ where: { id: persistedToken.id } });
+      }
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    await this.prisma.refreshToken.delete({ where: { id: persistedToken.id } });
+
+    return this.createAuthResponse(
+      persistedToken.user.id,
+      persistedToken.user.email,
+      persistedToken.user.role,
+      persistedToken.user.status,
+      persistedToken.user.createdAt
+    );
+  }
+
+  private async createAuthResponse(
     id: string,
     email: string,
     role: 'ADMIN' | 'USER',
@@ -50,9 +77,18 @@ export class AuthService {
     createdAt: Date
   ) {
     const accessToken = this.jwtService.sign({ sub: id, email, role });
+    const refreshToken = randomBytes(48).toString('hex');
+    await this.prisma.refreshToken.create({
+      data: {
+        tokenHash: this.hashRefreshToken(refreshToken),
+        userId: id,
+        expiresAt: new Date(Date.now() + env.AUTH_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000)
+      }
+    });
 
     return {
       accessToken,
+      refreshToken,
       user: {
         id,
         email,
@@ -61,5 +97,9 @@ export class AuthService {
         createdAt: createdAt.toISOString()
       }
     };
+  }
+
+  private hashRefreshToken(token: string) {
+    return createHash('sha256').update(token).digest('hex');
   }
 }

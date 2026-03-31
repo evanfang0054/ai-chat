@@ -10,7 +10,12 @@ export interface LoginRequest {
   password: string;
 }
 
+export interface RefreshTokenRequest {
+  refreshToken: string;
+}
+
 export interface AuthResponse {
   accessToken: string;
+  refreshToken: string;
   user: UserSummary;
 }

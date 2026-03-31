@@ -42,17 +42,50 @@ enum ScheduleRunStatus {
   FAILED
 }
 
+enum ErrorCategory {
+  USER_ERROR
+  EXTERNAL_ERROR
+  INTERNAL_ERROR
+}
+
+enum RunStage {
+  QUEUED
+  AGENT
+  LLM
+  TOOL
+  PERSISTENCE
+  COMPLETED
+}
+
+enum RunTriggerSource {
+  SCHEDULE
+  MANUAL_RETRY
+}
+
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
-  passwordHash String
-  role         UserRole      @default(USER)
-  status       UserStatus    @default(ACTIVE)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  chatSessions ChatSession[]
-  schedules    Schedule[]
-  scheduleRuns ScheduleRun[]
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  role          UserRole       @default(USER)
+  status        UserStatus     @default(ACTIVE)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  chatSessions  ChatSession[]
+  schedules     Schedule[]
+  scheduleRuns  ScheduleRun[]
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }
 
 model ChatSession {
@@ -123,6 +156,9 @@ model ScheduleRun {
   scheduleId         String
   userId             String
   status             ScheduleRunStatus @default(PENDING)
+  stage              RunStage          @default(QUEUED)
+  errorCategory      ErrorCategory?
+  triggerSource      RunTriggerSource  @default(SCHEDULE)
   taskPromptSnapshot String
   resultSummary      String?
   errorMessage       String?

@@ -7,6 +7,15 @@ describe('AuthController (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaClient;
 
+  const cleanupAuthData = async () => {
+    try {
+      await prisma.$executeRawUnsafe('DELETE FROM "RefreshToken"');
+    } catch {
+      // RefreshToken table is added later in this TDD cycle.
+    }
+    await prisma.user.deleteMany();
+  };
+
   beforeAll(async () => {
     process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ai_chat';
     process.env.REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -24,11 +33,11 @@ describe('AuthController (e2e)', () => {
 
     app = moduleRef.createNestApplication();
     await app.init();
-    await prisma.user.deleteMany();
+    await cleanupAuthData();
   });
 
   beforeEach(async () => {
-    await prisma.user.deleteMany();
+    await cleanupAuthData();
   });
 
   afterAll(async () => {
@@ -36,7 +45,7 @@ describe('AuthController (e2e)', () => {
     await prisma.$disconnect();
   });
 
-  it('POST /auth/register creates a user', async () => {
+  it('POST /auth/register creates a user and refresh token', async () => {
     const response = await request(app.getHttpServer())
       .post('/auth/register')
       .send({ email: 'user1@example.com', password: 'password123' })
@@ -44,9 +53,10 @@ describe('AuthController (e2e)', () => {
 
     expect(response.body.user.email).toBe('user1@example.com');
     expect(response.body.accessToken).toEqual(expect.any(String));
+    expect(response.body.refreshToken).toEqual(expect.any(String));
   });
 
-  it('POST /auth/login returns access token', async () => {
+  it('POST /auth/login returns access and refresh token', async () => {
     await request(app.getHttpServer())
       .post('/auth/register')
       .send({ email: 'user2@example.com', password: 'password123' })
@@ -59,6 +69,28 @@ describe('AuthController (e2e)', () => {
 
     expect(response.body.user.email).toBe('user2@example.com');
     expect(response.body.accessToken).toEqual(expect.any(String));
+    expect(response.body.refreshToken).toEqual(expect.any(String));
+  });
+
+  it('POST /auth/refresh rotates refresh token', async () => {
+    const registerResponse = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({ email: 'refresh@example.com', password: 'password123' })
+      .expect(201);
+
+    const refreshResponse = await request(app.getHttpServer())
+      .post('/auth/refresh')
+      .send({ refreshToken: registerResponse.body.refreshToken })
+      .expect(200);
+
+    expect(refreshResponse.body.accessToken).toEqual(expect.any(String));
+    expect(refreshResponse.body.refreshToken).toEqual(expect.any(String));
+    expect(refreshResponse.body.refreshToken).not.toBe(registerResponse.body.refreshToken);
+
+    await request(app.getHttpServer())
+      .post('/auth/refresh')
+      .send({ refreshToken: registerResponse.body.refreshToken })
+      .expect(401);
   });
 
   it('GET /auth/me returns current user', async () => {
