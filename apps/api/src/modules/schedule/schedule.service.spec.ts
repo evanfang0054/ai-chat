@@ -109,11 +109,15 @@ describe('schedule utils', () => {
         taskPrompt: 'Summarize updates',
         type: 'CRON',
         cronExpr: '0 9 * * *',
+        intervalMs: null,
         runAt: null,
         timezone: 'UTC',
         enabled: true,
         lastRunAt: new Date('2026-03-27T08:00:00.000Z'),
         nextRunAt: new Date('2026-03-28T09:00:00.000Z'),
+        latestRunStatus: 'FAILED',
+        latestFailureMessage: 'Agent failed',
+        latestResultSummary: null,
         createdAt: new Date('2026-03-26T08:00:00.000Z'),
         updatedAt: new Date('2026-03-27T08:30:00.000Z')
       })
@@ -123,11 +127,15 @@ describe('schedule utils', () => {
       taskPrompt: 'Summarize updates',
       type: 'CRON',
       cronExpr: '0 9 * * *',
+      intervalMs: null,
       runAt: null,
       timezone: 'UTC',
       enabled: true,
       lastRunAt: '2026-03-27T08:00:00.000Z',
       nextRunAt: '2026-03-28T09:00:00.000Z',
+      latestRunStatus: 'FAILED',
+      latestFailureMessage: 'Agent failed',
+      latestResultSummary: null,
       createdAt: '2026-03-26T08:00:00.000Z',
       updatedAt: '2026-03-27T08:30:00.000Z'
     });
@@ -141,11 +149,15 @@ describe('schedule utils', () => {
         taskPrompt: 'Notify me once',
         type: 'ONE_TIME',
         cronExpr: null,
+        intervalMs: null,
         runAt: new Date('2026-03-28T09:00:00.000Z'),
         timezone: 'UTC',
         enabled: false,
         lastRunAt: null,
         nextRunAt: null,
+        latestRunStatus: null,
+        latestFailureMessage: null,
+        latestResultSummary: null,
         createdAt: new Date('2026-03-26T08:00:00.000Z'),
         updatedAt: new Date('2026-03-27T08:30:00.000Z')
       })
@@ -155,11 +167,15 @@ describe('schedule utils', () => {
       taskPrompt: 'Notify me once',
       type: 'ONE_TIME',
       cronExpr: null,
+      intervalMs: null,
       runAt: '2026-03-28T09:00:00.000Z',
       timezone: 'UTC',
       enabled: false,
       lastRunAt: null,
       nextRunAt: null,
+      latestRunStatus: null,
+      latestFailureMessage: null,
+      latestResultSummary: null,
       createdAt: '2026-03-26T08:00:00.000Z',
       updatedAt: '2026-03-27T08:30:00.000Z'
     });
@@ -222,8 +238,9 @@ describe('ScheduleService', () => {
     userId: string;
     title: string;
     taskPrompt: string;
-    type: 'CRON' | 'ONE_TIME';
+    type: 'CRON' | 'ONE_TIME' | 'INTERVAL';
     cronExpr: string | null;
+    intervalMs: number | null;
     runAt: Date | null;
     timezone: string;
     enabled: boolean;
@@ -238,6 +255,9 @@ describe('ScheduleService', () => {
     scheduleId: string;
     userId: string;
     status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+    stage: 'QUEUED' | 'AGENT' | 'LLM' | 'TOOL' | 'PERSISTENCE' | 'COMPLETED';
+    errorCategory: 'USER_ERROR' | 'EXTERNAL_ERROR' | 'INTERNAL_ERROR' | null;
+    triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
     taskPromptSnapshot: string;
     resultSummary: string | null;
     errorMessage: string | null;
@@ -245,10 +265,13 @@ describe('ScheduleService', () => {
     startedAt: Date | null;
     finishedAt: Date | null;
     createdAt: Date;
+    chatSession: {
+      toolExecutions: Array<{ id: string }>;
+    } | null;
     schedule: {
       id: string;
       title: string;
-      type: 'CRON' | 'ONE_TIME';
+      type: 'CRON' | 'ONE_TIME' | 'INTERVAL';
     };
   };
 
@@ -260,6 +283,7 @@ describe('ScheduleService', () => {
       taskPrompt: 'Summarize unread issues',
       type: 'ONE_TIME',
       cronExpr: null,
+      intervalMs: null,
       runAt: new Date('2026-03-28T09:00:00.000Z'),
       timezone: 'UTC',
       enabled: true,
@@ -277,6 +301,9 @@ describe('ScheduleService', () => {
       scheduleId: 'schedule-1',
       userId,
       status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      errorCategory: null,
+      triggerSource: 'SCHEDULE',
       taskPromptSnapshot: 'Summarize unread issues',
       resultSummary: 'Done',
       errorMessage: null,
@@ -284,6 +311,9 @@ describe('ScheduleService', () => {
       startedAt: new Date('2026-03-28T09:00:00.000Z'),
       finishedAt: new Date('2026-03-28T09:00:10.000Z'),
       createdAt: new Date('2026-03-28T09:00:00.000Z'),
+      chatSession: {
+        toolExecutions: []
+      },
       schedule: {
         id: 'schedule-1',
         title: 'Morning summary',
@@ -329,6 +359,7 @@ describe('ScheduleService', () => {
         taskPrompt: 'Summarize unread issues',
         type: 'ONE_TIME',
         cronExpr: null,
+        intervalMs: null,
         runAt: new Date('2026-03-28T09:00:00.000Z'),
         timezone: 'UTC',
         enabled: true,
@@ -366,11 +397,15 @@ describe('ScheduleService', () => {
           taskPrompt: 'Summarize unread issues',
           type: 'ONE_TIME',
           cronExpr: null,
+          intervalMs: null,
           runAt: '2026-03-28T09:00:00.000Z',
           timezone: 'UTC',
           enabled: true,
           lastRunAt: null,
           nextRunAt: '2026-03-28T09:00:00.000Z',
+          latestRunStatus: null,
+          latestFailureMessage: null,
+          latestResultSummary: null,
           createdAt: '2026-03-27T08:00:00.000Z',
           updatedAt: '2026-03-27T08:00:00.000Z'
         }
@@ -432,6 +467,7 @@ describe('ScheduleService', () => {
         taskPrompt: existing.taskPrompt,
         type: 'CRON',
         cronExpr: '0 9 * * *',
+        intervalMs: null,
         runAt: null,
         timezone: 'UTC',
         enabled: true,
@@ -483,6 +519,7 @@ describe('ScheduleService', () => {
         taskPrompt: existing.taskPrompt,
         type: 'CRON',
         cronExpr: '0 18 * * *',
+        intervalMs: null,
         runAt: null,
         timezone: 'UTC',
         enabled: true,
@@ -529,6 +566,7 @@ describe('ScheduleService', () => {
         taskPrompt: existing.taskPrompt,
         type: 'CRON',
         cronExpr: '0 18 * * *',
+        intervalMs: null,
         runAt: null,
         timezone: 'UTC',
         enabled: true,
@@ -573,6 +611,7 @@ describe('ScheduleService', () => {
         taskPrompt: existing.taskPrompt,
         type: 'ONE_TIME',
         cronExpr: null,
+        intervalMs: null,
         runAt: new Date('2026-03-29T10:00:00.000Z'),
         timezone: 'UTC',
         enabled: true,
@@ -800,7 +839,16 @@ describe('ScheduleService', () => {
         status: 'SUCCEEDED'
       },
       include: {
-        schedule: true
+        schedule: true,
+        chatSession: {
+          include: {
+            toolExecutions: {
+              select: {
+                id: true
+              }
+            }
+          }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });
@@ -811,7 +859,12 @@ describe('ScheduleService', () => {
           scheduleId: 'schedule-1',
           userId,
           status: 'SUCCEEDED',
+          stage: 'COMPLETED',
           taskPromptSnapshot: 'Summarize unread issues',
+          errorCategory: null,
+          triggerSource: 'SCHEDULE',
+          durationMs: 10000,
+          toolExecutionCount: 0,
           resultSummary: 'Done',
           errorMessage: null,
           chatSessionId: 'chat-session-1',
@@ -825,6 +878,55 @@ describe('ScheduleService', () => {
           }
         }
       ]
+    });
+  });
+
+  it('getRunOrThrow returns stage errorCategory triggerSource durationMs and toolExecutionCount', async () => {
+    const run = createRunRecord({
+      status: 'FAILED',
+      stage: 'TOOL',
+      errorCategory: 'EXTERNAL_ERROR',
+      triggerSource: 'SCHEDULE',
+      resultSummary: null,
+      errorMessage: 'Tool provider timed out',
+      startedAt: new Date('2026-03-28T09:00:00.000Z'),
+      finishedAt: new Date('2026-03-28T09:00:05.000Z'),
+      chatSession: {
+        toolExecutions: [{ id: 'tool-1' }, { id: 'tool-2' }]
+      }
+    });
+    const findFirst = jest.fn().mockResolvedValue(run);
+    const prisma = {
+      scheduleRun: {
+        findFirst
+      }
+    };
+
+    const service = new ScheduleService(prisma as never);
+
+    await expect(service.getRunOrThrow(userId, 'run-1')).resolves.toMatchObject({
+      id: 'run-1',
+      status: 'FAILED',
+      stage: 'TOOL',
+      errorCategory: 'EXTERNAL_ERROR',
+      triggerSource: 'SCHEDULE',
+      durationMs: 5000,
+      toolExecutionCount: 2
+    });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: 'run-1', userId },
+      include: {
+        schedule: true,
+        chatSession: {
+          include: {
+            toolExecutions: {
+              select: {
+                id: true
+              }
+            }
+          }
+        }
+      }
     });
   });
 
@@ -842,7 +944,105 @@ describe('ScheduleService', () => {
     expect(findFirst).toHaveBeenCalledWith({
       where: { id: 'missing-run', userId: otherUserId },
       include: {
-        schedule: true
+        schedule: true,
+        chatSession: {
+          include: {
+            toolExecutions: {
+              select: {
+                id: true
+              }
+            }
+          }
+        }
+      }
+    });
+  });
+
+  it('creates rerun with MANUAL_RETRY triggerSource', async () => {
+    const run = createRunRecord({
+      id: 'run-1',
+      scheduleId: 'schedule-1',
+      userId,
+      schedule: {
+        id: 'schedule-1',
+        title: 'Morning summary',
+        type: 'ONE_TIME'
+      }
+    });
+    const rerun = createRunRecord({
+      id: 'run-2',
+      scheduleId: 'schedule-1',
+      userId,
+      status: 'PENDING',
+      stage: 'QUEUED',
+      triggerSource: 'MANUAL_RETRY',
+      resultSummary: null,
+      errorMessage: null,
+      chatSessionId: null,
+      startedAt: null,
+      finishedAt: null,
+      createdAt: new Date('2026-03-28T10:00:00.000Z'),
+      chatSession: null,
+      schedule: {
+        id: 'schedule-1',
+        title: 'Morning summary',
+        type: 'ONE_TIME'
+      }
+    });
+    const findFirst = jest.fn().mockResolvedValue(run);
+    const create = jest.fn().mockResolvedValue(rerun);
+    const prisma = {
+      scheduleRun: {
+        findFirst,
+        create
+      }
+    };
+
+    const service = new ScheduleService(prisma as never);
+
+    await expect(service.retryRun('run-1', userId)).resolves.toMatchObject({
+      run: {
+        id: 'run-2',
+        triggerSource: 'MANUAL_RETRY',
+        status: 'PENDING',
+        stage: 'QUEUED'
+      }
+    });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: 'run-1', userId },
+      include: {
+        schedule: true,
+        chatSession: {
+          include: {
+            toolExecutions: {
+              select: {
+                id: true
+              }
+            }
+          }
+        }
+      }
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        scheduleId: 'schedule-1',
+        userId,
+        status: 'PENDING',
+        stage: 'QUEUED',
+        triggerSource: 'MANUAL_RETRY',
+        taskPromptSnapshot: 'Summarize unread issues'
+      },
+      include: {
+        schedule: true,
+        chatSession: {
+          include: {
+            toolExecutions: {
+              select: {
+                id: true
+              }
+            }
+          }
+        }
       }
     });
   });

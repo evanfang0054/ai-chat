@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { ToolExecution } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { env } from '../../common/config/env';
@@ -12,6 +12,8 @@ import type {
 
 @Injectable()
 export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async listSessions(userId: string): Promise<ListChatSessionsResponse> {
@@ -169,6 +171,7 @@ export class ChatService {
       status: execution.status,
       input: this.toNullableJsonString(execution.input),
       output: this.toNullableJsonString(execution.output),
+      errorCategory: execution.status === 'FAILED' ? 'INTERNAL_ERROR' : null,
       errorMessage: execution.errorMessage,
       startedAt: execution.startedAt.toISOString(),
       finishedAt: execution.finishedAt ? execution.finishedAt.toISOString() : null

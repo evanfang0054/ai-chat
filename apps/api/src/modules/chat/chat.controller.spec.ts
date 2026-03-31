@@ -9,133 +9,193 @@ import type { Response } from 'express';
 import { ChatController } from './chat.controller';
 
 describe('ChatController', () => {
-  it('emits run_failed and does not save an assistant message when agent output is empty', async () => {
-    const session = {
-      id: 'session-1',
-      userId: 'user-1',
-      title: 'Ping',
-      createdAt: '2026-03-26T12:00:00.000Z',
-      updatedAt: '2026-03-26T12:00:00.000Z'
+  const session = {
+    id: 'session-1',
+    userId: 'user-1',
+    title: 'Ping',
+    model: 'deepseek-chat',
+    createdAt: '2026-03-26T12:00:00.000Z',
+    updatedAt: '2026-03-26T12:00:00.000Z'
+  };
+
+  const userMessage = {
+    id: 'message-1',
+    sessionId: 'session-1',
+    role: 'USER' as const,
+    content: 'Ping',
+    createdAt: '2026-03-26T12:00:00.000Z'
+  };
+
+  const finalizedMessage = {
+    id: 'message-2',
+    sessionId: 'session-1',
+    role: 'ASSISTANT' as const,
+    content: '',
+    createdAt: '2026-03-26T12:00:01.000Z'
+  };
+
+  function createResponseRecorder() {
+    const writes: string[] = [];
+    let ended = false;
+    let resolveEnded: (() => void) | null = null;
+    const endPromise = new Promise<void>((resolve) => {
+      resolveEnded = resolve;
+    });
+    const res = {
+      setHeader: jest.fn(),
+      writeHead: jest.fn(),
+      write: jest.fn((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return true;
+      }),
+      end: jest.fn(() => {
+        ended = true;
+        resolveEnded?.();
+      }),
+      statusCode: 200
+    } as unknown as Response;
+
+    return {
+      res,
+      writes,
+      waitForEnd: async () => {
+        if (!ended) {
+          await endPromise;
+        }
+      }
     };
-    const userMessage = {
-      id: 'message-1',
-      sessionId: 'session-1',
-      role: 'USER',
-      content: 'Ping',
-      createdAt: '2026-03-26T12:00:00.000Z'
-    };
-    const chatService = {
+  }
+
+  function createChatService(overrides: Record<string, unknown> = {}) {
+    return {
       createSessionWithFirstMessage: jest.fn().mockResolvedValue({ session, userMessage }),
       getSessionOrThrow: jest.fn().mockResolvedValue(session),
       addUserMessage: jest.fn(),
       formatSessionSummary: jest.fn().mockImplementation((value) => value),
       formatMessage: jest.fn().mockImplementation((value) => value),
       listMessages: jest.fn().mockResolvedValue({ messages: [userMessage] }),
-      saveAssistantMessage: jest.fn()
+      finalizeAssistantReply: jest.fn().mockResolvedValue({
+        session,
+        message: finalizedMessage
+      }),
+      ...overrides
     };
+  }
+
+  it('emits agent-error and still finalizes the session when the agent reports an execution error', async () => {
+    const chatService = createChatService({
+      finalizeAssistantReply: jest.fn().mockResolvedValue({
+        session,
+        message: finalizedMessage
+      })
+    });
     const agentService = {
-      streamChatReply: jest.fn().mockImplementation(() => ({
-        [Symbol.asyncIterator]() {
-          throw new Error('Agent response was empty');
-        }
-      }))
+      streamChatReply: jest.fn().mockImplementation(async function* () {
+        yield {
+          type: 'agent-error',
+          error: {
+            stage: 'LLM',
+            errorCategory: 'INTERNAL_ERROR',
+            errorMessage: 'Agent response was empty'
+          }
+        };
+        yield { type: 'finish' };
+      })
     };
     const controller = new ChatController(chatService as never, agentService as never);
-    const writes: string[] = [];
-    const res = {
-      setHeader: jest.fn(),
-      write: jest.fn((chunk: string) => {
-        writes.push(chunk);
-        return true;
-      }),
-      end: jest.fn()
-    } as unknown as Response;
+    const { res, writes, waitForEnd } = createResponseRecorder();
 
     await controller.streamChat(
       { userId: 'user-1', email: 'user@example.com', role: 'USER' },
       { content: ' Ping ' },
       res
     );
+    await waitForEnd();
 
-    expect(chatService.saveAssistantMessage).not.toHaveBeenCalled();
-    expect(writes.some((chunk) => chunk.includes('"type":"run_failed"'))).toBe(true);
+    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      history: [],
+      prompt: 'Ping'
+    });
+    expect(chatService.finalizeAssistantReply).toHaveBeenCalledWith('session-1', '');
+    expect(writes.some((chunk) => chunk.includes('"type":"session-start"'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('"type":"agent-error"'))).toBe(true);
     expect(writes.some((chunk) => chunk.includes('Agent response was empty'))).toBe(true);
-    expect(writes.some((chunk) => chunk.includes('"type":"run_completed"'))).toBe(false);
+    expect(writes.some((chunk) => chunk.includes('"type":"session-finish"'))).toBe(true);
+    expect(res.end).toHaveBeenCalled();
   });
 
-  it('emits run_failed instead of run_completed when agent stream fails after tool failure', async () => {
-    const session = {
-      id: 'session-1',
-      userId: 'user-1',
-      title: 'What time is it?',
-      createdAt: '2026-03-26T12:00:00.000Z',
-      updatedAt: '2026-03-26T12:00:00.000Z'
-    };
-    const userMessage = {
-      id: 'message-1',
-      sessionId: 'session-1',
-      role: 'USER',
-      content: 'What time is it?',
-      createdAt: '2026-03-26T12:00:00.000Z'
-    };
-    const chatService = {
-      createSessionWithFirstMessage: jest.fn().mockResolvedValue({ session, userMessage }),
-      getSessionOrThrow: jest.fn().mockResolvedValue(session),
-      addUserMessage: jest.fn(),
-      formatSessionSummary: jest.fn().mockImplementation((value) => value),
-      formatMessage: jest.fn().mockImplementation((value) => value),
-      listMessages: jest.fn().mockResolvedValue({ messages: [userMessage] }),
-      saveAssistantMessage: jest.fn()
-    };
+  it('emits tool input and output error events and still finalizes the response', async () => {
+    const chatService = createChatService({
+      finalizeAssistantReply: jest.fn().mockResolvedValue({
+        session,
+        message: {
+          ...finalizedMessage,
+          content: 'Recovered after tool failure'
+        }
+      })
+    });
     const agentService = {
       streamChatReply: jest.fn().mockImplementation(async function* () {
         yield {
-          type: 'tool_started',
+          type: 'tool-input-start',
           toolExecution: {
             id: 'tool-execution-1',
-            sessionId: 'session-1',
+            sessionId: 'other-session',
             toolName: 'get_current_time',
             status: 'RUNNING',
             input: '{"timezone":"UTC"}',
             output: null,
+            errorCategory: null,
             errorMessage: null,
             startedAt: '2026-03-26T12:00:00.000Z',
             finishedAt: null
           }
         };
         yield {
-          type: 'tool_failed',
+          type: 'tool-input-available',
           toolExecution: {
             id: 'tool-execution-1',
-            sessionId: 'session-1',
+            sessionId: 'other-session',
+            toolName: 'get_current_time',
+            status: 'RUNNING',
+            input: '{"timezone":"UTC"}',
+            output: null,
+            errorCategory: null,
+            errorMessage: null,
+            startedAt: '2026-03-26T12:00:00.000Z',
+            finishedAt: null
+          }
+        };
+        yield {
+          type: 'tool-output-error',
+          toolExecution: {
+            id: 'tool-execution-1',
+            sessionId: 'other-session',
             toolName: 'get_current_time',
             status: 'FAILED',
             input: '{"timezone":"UTC"}',
             output: null,
+            errorCategory: 'INTERNAL_ERROR',
             errorMessage: 'Tool execution failed',
             startedAt: '2026-03-26T12:00:00.000Z',
             finishedAt: '2026-03-26T12:00:01.000Z'
           }
         };
-        throw new Error('Tool execution failed');
+        yield { type: 'text-delta', textDelta: 'Recovered after tool failure' };
+        yield { type: 'finish' };
       })
     };
     const controller = new ChatController(chatService as never, agentService as never);
-    const writes: string[] = [];
-    const res = {
-      setHeader: jest.fn(),
-      write: jest.fn((chunk: string) => {
-        writes.push(chunk);
-        return true;
-      }),
-      end: jest.fn()
-    } as unknown as Response;
+    const { res, writes, waitForEnd } = createResponseRecorder();
 
     await controller.streamChat(
       { userId: 'user-1', email: 'user@example.com', role: 'USER' },
       { content: ' What time is it? ' },
       res
     );
+    await waitForEnd();
 
     expect(agentService.streamChatReply).toHaveBeenCalledWith({
       userId: 'user-1',
@@ -143,11 +203,48 @@ describe('ChatController', () => {
       history: [],
       prompt: 'What time is it?'
     });
-    expect(chatService.saveAssistantMessage).not.toHaveBeenCalled();
-    expect(writes.some((chunk) => chunk.includes('"type":"tool_started"'))).toBe(true);
-    expect(writes.some((chunk) => chunk.includes('"type":"tool_failed"'))).toBe(true);
-    expect(writes.some((chunk) => chunk.includes('"type":"run_failed"'))).toBe(true);
-    expect(writes.some((chunk) => chunk.includes('"type":"run_completed"'))).toBe(false);
+    expect(chatService.finalizeAssistantReply).toHaveBeenCalledWith('session-1', 'Recovered after tool failure');
+    expect(writes.some((chunk) => chunk.includes('"type":"tool-input-start"'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('"type":"tool-input-available"'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('"type":"tool-output-error"'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('Tool execution failed'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('"sessionId":"session-1"'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('Recovered after tool failure'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('"type":"session-finish"'))).toBe(true);
+    expect(res.end).toHaveBeenCalled();
+  });
+
+  it('finalizes the assistant reply after a normal text stream', async () => {
+    const chatService = createChatService({
+      finalizeAssistantReply: jest.fn().mockResolvedValue({
+        session,
+        message: {
+          ...finalizedMessage,
+          content: 'Hello world'
+        }
+      })
+    });
+    const agentService = {
+      streamChatReply: jest.fn().mockImplementation(async function* () {
+        yield { type: 'text-delta', textDelta: 'Hello ' };
+        yield { type: 'text-delta', textDelta: 'world' };
+        yield { type: 'finish' };
+      })
+    };
+    const controller = new ChatController(chatService as never, agentService as never);
+    const { res, writes, waitForEnd } = createResponseRecorder();
+
+    await controller.streamChat(
+      { userId: 'user-1', email: 'user@example.com', role: 'USER' },
+      { content: ' Ping ' },
+      res
+    );
+    await waitForEnd();
+
+    expect(chatService.finalizeAssistantReply).toHaveBeenCalledWith('session-1', 'Hello world');
+    expect(writes.some((chunk) => chunk.includes('"type":"session-start"'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('Hello world'))).toBe(true);
+    expect(writes.some((chunk) => chunk.includes('"type":"session-finish"'))).toBe(true);
     expect(res.end).toHaveBeenCalled();
   });
 });

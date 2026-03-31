@@ -119,6 +119,7 @@ describe('ToolService', () => {
 
     await expect(started.run()).rejects.toMatchObject({
       message: 'boom',
+      category: 'INTERNAL_ERROR',
       execution: failedExecution
     });
 
@@ -141,6 +142,74 @@ describe('ToolService', () => {
 
     service.getDefinition('get_current_time')!.execute = originalExecute!;
     Date.now = originalNow;
+  });
+
+  it('updates execution to failed when tool execution times out', async () => {
+    const createdExecution = {
+      id: 'tool-execution-timeout',
+      sessionId: 'session-1',
+      toolName: 'get_current_time',
+      status: 'RUNNING',
+      input: {},
+      output: null,
+      errorMessage: null,
+      startedAt: new Date('2026-03-26T12:10:00.000Z'),
+      finishedAt: null
+    };
+    const failedExecution = {
+      ...createdExecution,
+      status: 'FAILED',
+      errorMessage: 'Tool execution (get_current_time) timeout',
+      finishedAt: new Date('2026-03-26T12:11:00.000Z')
+    };
+    const create = jest.fn().mockResolvedValue(createdExecution);
+    const update = jest.fn().mockResolvedValue(failedExecution);
+    const prisma = {
+      toolExecution: {
+        create,
+        update
+      }
+    };
+    const scheduleService = {
+      createSchedule: jest.fn(),
+      listSchedules: jest.fn(),
+      updateSchedule: jest.fn(),
+      deleteSchedule: jest.fn(),
+      enableSchedule: jest.fn(),
+      disableSchedule: jest.fn()
+    };
+
+    jest.useFakeTimers();
+    const { ToolService } = await import('./tool.service');
+    const service = new ToolService(prisma as never, scheduleService as never);
+    const originalExecute = service.getDefinition('get_current_time')?.execute;
+    service.getDefinition('get_current_time')!.execute = jest.fn(
+      () => new Promise(() => undefined)
+    );
+
+    const started = await service.startToolExecution('get_current_time', {}, {
+      sessionId: 'session-1',
+      userId: 'user-1'
+    });
+    const runPromise = started.run();
+    const rejection = expect(runPromise).rejects.toMatchObject({
+      message: 'Tool execution (get_current_time) timeout',
+      category: 'INTERNAL_ERROR',
+      execution: failedExecution
+    });
+    await jest.advanceTimersByTimeAsync(60000);
+    await rejection;
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'tool-execution-timeout' },
+      data: {
+        status: 'FAILED',
+        errorMessage: 'Tool execution (get_current_time) timeout',
+        finishedAt: expect.any(Date)
+      }
+    });
+
+    service.getDefinition('get_current_time')!.execute = originalExecute!;
+    jest.useRealTimers();
   });
 
   it('registers manage_schedule tool and can list it', async () => {

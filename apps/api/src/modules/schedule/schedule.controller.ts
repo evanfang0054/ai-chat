@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } f
 import type {
   CreateScheduleRequest,
   DeleteScheduleResponse,
+  RetryScheduleRunResponse,
   ScheduleRunStatus,
   ScheduleType,
   UpdateScheduleRequest
@@ -77,5 +78,10 @@ export class ScheduleController {
     return {
       run: await this.scheduleService.getRunOrThrow(user.userId, id)
     };
+  }
+
+  @Post('runs/:id/retry')
+  retryRun(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string): Promise<RetryScheduleRunResponse> {
+    return this.scheduleService.retryRun(id, user.userId);
   }
 }

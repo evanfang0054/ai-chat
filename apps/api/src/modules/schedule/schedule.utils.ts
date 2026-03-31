@@ -89,6 +89,9 @@ export function toScheduleSummary(schedule: ScheduleSummaryLike): ScheduleSummar
     enabled: schedule.enabled,
     lastRunAt: schedule.lastRunAt?.toISOString() ?? null,
     nextRunAt: schedule.nextRunAt?.toISOString() ?? null,
+    latestRunStatus: schedule.latestRunStatus,
+    latestFailureMessage: schedule.latestFailureMessage,
+    latestResultSummary: schedule.latestResultSummary,
     createdAt: schedule.createdAt.toISOString(),
     updatedAt: schedule.updatedAt.toISOString()
   };

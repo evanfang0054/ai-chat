@@ -1,6 +1,6 @@
 import { formatDataStreamPart, pipeDataStreamToResponse } from 'ai';
 import type { JSONValue } from 'ai';
-import { BadRequestException, Body, Controller, Get, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -12,6 +12,8 @@ import type { CurrentUser as CurrentUserPayload } from './chat.types';
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
 export class ChatController {
+  private readonly logger = new Logger(ChatController.name);
+
   constructor(
     private readonly chatService: ChatService,
     private readonly agentService: AgentService
@@ -173,7 +175,17 @@ export class ChatController {
                 toolExecution
               })
             );
-            throw new Error(toolExecution.errorMessage);
+            continue;
+          }
+
+          if (event.type === 'agent-error') {
+            writer.writeData(
+              this.toJsonValue({
+                type: 'agent-error',
+                error: event.error
+              })
+            );
+            continue;
           }
         }
 

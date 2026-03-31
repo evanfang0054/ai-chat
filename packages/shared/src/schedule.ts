@@ -1,5 +1,9 @@
 export type ScheduleType = 'CRON' | 'ONE_TIME' | 'INTERVAL';
 
+export type ErrorCategory = 'USER_ERROR' | 'EXTERNAL_ERROR' | 'INTERNAL_ERROR';
+
+export type RunStage = 'QUEUED' | 'AGENT' | 'LLM' | 'TOOL' | 'PERSISTENCE' | 'COMPLETED';
+
 export type ScheduleRunStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
 
 interface ScheduleSummaryBase {
@@ -10,6 +14,9 @@ interface ScheduleSummaryBase {
   enabled: boolean;
   lastRunAt: string | null;
   nextRunAt: string | null;
+  latestRunStatus: ScheduleRunStatus | null;
+  latestFailureMessage: string | null;
+  latestResultSummary: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -43,7 +50,22 @@ export interface ScheduleReference {
   type: ScheduleType;
 }
 
-interface ScheduleRunSummaryBase {
+export interface RunDiagnosticsSummary {
+  stage: RunStage;
+  errorCategory: ErrorCategory | null;
+  triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
+  durationMs: number | null;
+  toolExecutionCount: number;
+}
+
+export interface RunToolExecutionSummary {
+  id: string;
+  toolName: string;
+  status: 'SUCCEEDED' | 'FAILED';
+  errorCategory: ErrorCategory | null;
+}
+
+interface ScheduleRunSummaryBase extends RunDiagnosticsSummary {
   id: string;
   scheduleId: string;
   userId: string;
@@ -55,6 +77,11 @@ interface ScheduleRunSummaryBase {
 
 export type PendingScheduleRunSummary = ScheduleRunSummaryBase & {
   status: 'PENDING';
+  stage: 'QUEUED';
+  errorCategory: null;
+  triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
+  durationMs: null;
+  toolExecutionCount: number;
   resultSummary: null;
   errorMessage: null;
   startedAt: null;
@@ -63,6 +90,11 @@ export type PendingScheduleRunSummary = ScheduleRunSummaryBase & {
 
 export type RunningScheduleRunSummary = ScheduleRunSummaryBase & {
   status: 'RUNNING';
+  stage: Exclude<RunStage, 'QUEUED' | 'COMPLETED'>;
+  errorCategory: null;
+  triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
+  durationMs: null;
+  toolExecutionCount: number;
   resultSummary: null;
   errorMessage: null;
   startedAt: string;
@@ -71,6 +103,11 @@ export type RunningScheduleRunSummary = ScheduleRunSummaryBase & {
 
 export type SucceededScheduleRunSummary = ScheduleRunSummaryBase & {
   status: 'SUCCEEDED';
+  stage: 'COMPLETED';
+  errorCategory: null;
+  triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
+  durationMs: number;
+  toolExecutionCount: number;
   resultSummary: string;
   errorMessage: null;
   startedAt: string;
@@ -79,6 +116,11 @@ export type SucceededScheduleRunSummary = ScheduleRunSummaryBase & {
 
 export type FailedScheduleRunSummary = ScheduleRunSummaryBase & {
   status: 'FAILED';
+  stage: Exclude<RunStage, 'QUEUED' | 'COMPLETED'>;
+  errorCategory: ErrorCategory;
+  triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
+  durationMs: number;
+  toolExecutionCount: number;
   resultSummary: null;
   errorMessage: string;
   startedAt: string;
@@ -147,5 +189,11 @@ export interface ListScheduleRunsResponse {
 }
 
 export interface GetScheduleRunResponse {
+  run: ScheduleRunSummary & {
+    toolExecutions?: RunToolExecutionSummary[];
+  };
+}
+
+export interface RetryScheduleRunResponse {
   run: ScheduleRunSummary;
 }

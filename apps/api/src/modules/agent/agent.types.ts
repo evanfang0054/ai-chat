@@ -1,4 +1,5 @@
 import type {
+  ErrorCategory,
   ToolExecutionFailedSummary,
   ToolExecutionRunningSummary,
   ToolExecutionSucceededSummary,
@@ -21,6 +22,21 @@ export interface StreamChatReplyInput {
   history: AgentHistoryMessage[];
   prompt: string;
   forcedToolCall?: ForcedToolCall;
+  scheduleId?: string;
+  runId?: string;
+}
+
+export interface AgentExecutionContext {
+  userId: string;
+  sessionId: string;
+  scheduleId: string | null;
+  runId: string | null;
+}
+
+export interface AgentFailureDetails {
+  stage: 'LLM' | 'TOOL';
+  errorCategory: ErrorCategory;
+  errorMessage: string;
 }
 
 export type AgentStreamEvent =
@@ -29,4 +45,5 @@ export type AgentStreamEvent =
   | { type: 'tool-input-available'; toolExecution: ToolExecutionRunningSummary }
   | { type: 'tool-output-available'; toolExecution: ToolExecutionSucceededSummary }
   | { type: 'tool-output-error'; toolExecution: ToolExecutionFailedSummary }
+  | { type: 'agent-error'; error: AgentFailureDetails }
   | { type: 'finish' };

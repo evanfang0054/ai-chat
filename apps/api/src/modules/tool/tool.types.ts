@@ -1,8 +1,18 @@
+import type { ErrorCategory } from '@ai-chat/shared';
 import type { z } from 'zod';
+
+export type ToolFailureCategory = ErrorCategory;
+
+export interface ToolFailureDetails {
+  category: ToolFailureCategory;
+  message: string;
+}
 
 export interface ToolExecutionContext {
   sessionId: string;
   userId: string;
+  scheduleId?: string;
+  runId?: string;
 }
 
 export interface ToolMetadata {

@@ -2,7 +2,12 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
 
-import { SCHEDULE_TICK_JOB, SCHEDULE_TICK_QUEUE } from '../../common/queue/queue.constants';
+import {
+  markScheduleTickHeartbeat,
+  SCHEDULE_TICK_INSTANCE,
+  SCHEDULE_TICK_JOB,
+  SCHEDULE_TICK_QUEUE
+} from '../../common/queue/queue.constants';
 import { ScheduleRunnerService } from './schedule-runner.service';
 
 @Injectable()
@@ -16,12 +21,26 @@ export class ScheduleTickProcessor extends WorkerHost {
 
   async process(job: Job): Promise<void> {
     if (job.name !== SCHEDULE_TICK_JOB) {
-      this.logger.warn(`Skip unexpected job: ${job.name}`);
+      this.logger.warn('schedule_tick_unexpected_job', {
+        instanceId: SCHEDULE_TICK_INSTANCE,
+        queueName: SCHEDULE_TICK_QUEUE,
+        jobName: job.name
+      });
       return;
     }
 
-    this.logger.debug('Processing schedule tick job');
+    markScheduleTickHeartbeat(new Date(), SCHEDULE_TICK_INSTANCE);
+    this.logger.debug('schedule_tick_started', {
+      instanceId: SCHEDULE_TICK_INSTANCE,
+      queueName: SCHEDULE_TICK_QUEUE,
+      jobId: job.id
+    });
     await this.scheduleRunnerService.processDueSchedules(new Date());
+    this.logger.debug('schedule_tick_completed', {
+      instanceId: SCHEDULE_TICK_INSTANCE,
+      queueName: SCHEDULE_TICK_QUEUE,
+      jobId: job.id
+    });
   }
 
   @OnWorkerEvent('error')

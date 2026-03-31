@@ -49,7 +49,10 @@ describe('AgentService', () => {
     expect(llmService.createChatModel).toHaveBeenCalled();
     expect(bindTools).toHaveBeenCalled();
     expect(toolService.startToolExecution).not.toHaveBeenCalled();
-    expect(events).toEqual([{ type: 'text_delta', delta: 'Hello world' }, { type: 'run_completed' }]);
+    expect(events).toEqual([
+      { type: 'text-delta', textDelta: 'Hello world' },
+      { type: 'finish' }
+    ]);
   });
 
   it('prepends the tool-usage system prompt before chat history', async () => {
@@ -84,6 +87,7 @@ describe('AgentService', () => {
       ])
     );
   });
+
   it('guides the model to infer structured schedule arguments for natural-language schedule requests', async () => {
     const invoke = jest.fn().mockResolvedValue({ content: 'ok', tool_calls: [] });
     const bindTools = jest.fn().mockReturnValue({ invoke });
@@ -125,7 +129,6 @@ describe('AgentService', () => {
       ])
     );
   });
-
 
   it('requires explicit confirmation before deleting a schedule', async () => {
     const invoke = jest.fn().mockResolvedValue({ content: 'Please confirm which schedule to delete.', tool_calls: [] });
@@ -199,6 +202,121 @@ describe('AgentService', () => {
     expect(toolService.startToolExecution).not.toHaveBeenCalled();
   });
 
+  it('emits agent-error when LLM invocation times out', async () => {
+    jest.useFakeTimers();
+    const invoke = jest.fn().mockImplementation(() => new Promise(() => undefined));
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([]),
+      getDefinition: jest.fn(),
+      startToolExecution: jest.fn()
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+    const events: AgentStreamEvent[] = [];
+    const runPromise = (async () => {
+      for await (const event of service.streamChatReply({
+        userId: 'user-1',
+        sessionId: 'session-1',
+        history: [],
+        prompt: 'Hello'
+      })) {
+        events.push(event);
+      }
+    })();
+
+    const rejection = expect(runPromise).rejects.toThrow('Agent LLM response timeout');
+    await jest.advanceTimersByTimeAsync(120000);
+    await rejection;
+    expect(events).toEqual([
+      {
+        type: 'agent-error',
+        error: {
+          stage: 'LLM',
+          errorCategory: 'INTERNAL_ERROR',
+          errorMessage: 'Agent LLM response timeout'
+        }
+      }
+    ]);
+    jest.useRealTimers();
+  });
+
+  it('emits agent-error when tool execution times out before a failed execution summary exists', async () => {
+    jest.useFakeTimers();
+    const toolStartedExecution = {
+      id: 'tool-execution-timeout',
+      sessionId: 'session-1',
+      toolName: 'get_current_time',
+      status: 'RUNNING' as const,
+      input: '{"timezone":"UTC"}',
+      output: null,
+      errorCategory: null,
+      errorMessage: null,
+      startedAt: '2026-03-26T12:00:00.000Z',
+      finishedAt: null
+    };
+    const invoke = jest.fn().mockResolvedValue({
+      content: '',
+      tool_calls: [{ name: 'get_current_time', args: { timezone: 'UTC' } }]
+    });
+    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const run = jest.fn().mockImplementation(() => new Promise(() => undefined));
+    const llmService = {
+      createChatModel: jest.fn().mockReturnValue({ bindTools })
+    };
+    const toolService = {
+      listDefinitions: jest.fn().mockReturnValue([
+        { name: 'get_current_time', description: 'Get the current server time in ISO format.' }
+      ]),
+      getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
+      startToolExecution: jest.fn().mockResolvedValue({
+        execution: toolStartedExecution,
+        run
+      })
+    };
+
+    const { AgentService } = await import('./agent.service');
+    const service = new AgentService(llmService as never, toolService as never);
+    const events: AgentStreamEvent[] = [];
+    const runPromise = (async () => {
+      for await (const event of service.streamChatReply({
+        userId: 'user-1',
+        sessionId: 'session-1',
+        history: [{ role: 'USER', content: 'Hi' }],
+        prompt: 'What time is it now in UTC?'
+      })) {
+        events.push(event);
+      }
+    })();
+
+    const rejection = expect(runPromise).rejects.toThrow('Agent tool call (get_current_time) timeout');
+    await jest.advanceTimersByTimeAsync(60000);
+    await rejection;
+    expect(toolService.startToolExecution).toHaveBeenCalledWith('get_current_time', { timezone: 'UTC' }, {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      scheduleId: undefined,
+      runId: undefined
+    });
+    expect(events).toEqual([
+      { type: 'tool-input-start', toolExecution: toolStartedExecution },
+      { type: 'tool-input-available', toolExecution: toolStartedExecution },
+      {
+        type: 'agent-error',
+        error: {
+          stage: 'LLM',
+          errorCategory: 'INTERNAL_ERROR',
+          errorMessage: 'Agent tool call (get_current_time) timeout'
+        }
+      }
+    ]);
+    jest.useRealTimers();
+  });
+
   it('emits the tool-success event sequence for a LangChain tool call', async () => {
     const toolStartedExecution = {
       id: 'tool-execution-1',
@@ -207,6 +325,7 @@ describe('AgentService', () => {
       status: 'RUNNING' as const,
       input: '{"timezone":"UTC"}',
       output: null,
+      errorCategory: null,
       errorMessage: null,
       startedAt: '2026-03-26T12:00:00.000Z',
       finishedAt: null
@@ -255,14 +374,17 @@ describe('AgentService', () => {
 
     expect(toolService.startToolExecution).toHaveBeenCalledWith('get_current_time', { timezone: 'UTC' }, {
       sessionId: 'session-1',
-      userId: 'user-1'
+      userId: 'user-1',
+      scheduleId: undefined,
+      runId: undefined
     });
     expect(run).toHaveBeenCalled();
     expect(events).toEqual([
-      { type: 'tool_started', toolExecution: toolStartedExecution },
-      { type: 'tool_completed', toolExecution: toolCompletedExecution },
-      { type: 'text_delta', delta: 'The current UTC time is 2026-03-26T12:00:00.000Z.' },
-      { type: 'run_completed' }
+      { type: 'tool-input-start', toolExecution: toolStartedExecution },
+      { type: 'tool-input-available', toolExecution: toolStartedExecution },
+      { type: 'tool-output-available', toolExecution: toolCompletedExecution },
+      { type: 'text-delta', textDelta: 'The current UTC time is 2026-03-26T12:00:00.000Z.' },
+      { type: 'finish' }
     ]);
   });
 
@@ -274,6 +396,7 @@ describe('AgentService', () => {
       status: 'RUNNING' as const,
       input: '{"action":"create"}',
       output: null,
+      errorCategory: null,
       errorMessage: null,
       startedAt: '2026-03-26T12:00:00.000Z',
       finishedAt: null
@@ -321,10 +444,11 @@ describe('AgentService', () => {
     }
 
     expect(events).toEqual([
-      { type: 'tool_started', toolExecution: toolStartedExecution },
-      { type: 'tool_completed', toolExecution: toolCompletedExecution },
-      { type: 'text_delta', delta: toolCompletedExecution.output },
-      { type: 'run_completed' }
+      { type: 'tool-input-start', toolExecution: toolStartedExecution },
+      { type: 'tool-input-available', toolExecution: toolStartedExecution },
+      { type: 'tool-output-available', toolExecution: toolCompletedExecution },
+      { type: 'text-delta', textDelta: toolCompletedExecution.output },
+      { type: 'finish' }
     ]);
   });
 
@@ -336,6 +460,7 @@ describe('AgentService', () => {
       status: 'RUNNING' as const,
       input: '{"action":"list","enabled":true}',
       output: null,
+      errorCategory: null,
       errorMessage: null,
       startedAt: '2026-03-27T12:00:00.000Z',
       finishedAt: null
@@ -385,13 +510,16 @@ describe('AgentService', () => {
 
     expect(toolService.startToolExecution).toHaveBeenCalledWith('manage_schedule', { action: 'list', enabled: true }, {
       sessionId: 'session-1',
-      userId: 'user-1'
+      userId: 'user-1',
+      scheduleId: undefined,
+      runId: undefined
     });
     expect(events).toEqual([
-      { type: 'tool_started', toolExecution: toolStartedExecution },
-      { type: 'tool_completed', toolExecution: toolCompletedExecution },
-      { type: 'text_delta', delta: 'Found 1 schedules.' },
-      { type: 'run_completed' }
+      { type: 'tool-input-start', toolExecution: toolStartedExecution },
+      { type: 'tool-input-available', toolExecution: toolStartedExecution },
+      { type: 'tool-output-available', toolExecution: toolCompletedExecution },
+      { type: 'text-delta', textDelta: 'Found 1 schedules.' },
+      { type: 'finish' }
     ]);
   });
 
@@ -403,6 +531,7 @@ describe('AgentService', () => {
       status: 'RUNNING' as const,
       input: '{"timezone":"UTC"}',
       output: null,
+      errorCategory: null,
       errorMessage: null,
       startedAt: '2026-03-26T12:00:00.000Z',
       finishedAt: null
@@ -415,7 +544,8 @@ describe('AgentService', () => {
       finishedAt: '2026-03-26T12:05:01.000Z'
     };
     const toolError = Object.assign(new Error('Tool execution failed'), {
-      execution: toolFailedExecution
+      execution: toolFailedExecution,
+      category: 'INTERNAL_ERROR'
     });
     const invoke = jest.fn().mockResolvedValue({
       content: '',
@@ -456,12 +586,29 @@ describe('AgentService', () => {
 
     expect(toolService.startToolExecution).toHaveBeenCalledWith('get_current_time', { timezone: 'UTC' }, {
       sessionId: 'session-1',
-      userId: 'user-1'
+      userId: 'user-1',
+      scheduleId: undefined,
+      runId: undefined
     });
     expect(run).toHaveBeenCalled();
     expect(events).toEqual([
-      { type: 'tool_started', toolExecution: toolStartedExecution },
-      { type: 'tool_failed', toolExecution: toolFailedExecution }
+      { type: 'tool-input-start', toolExecution: toolStartedExecution },
+      { type: 'tool-input-available', toolExecution: toolStartedExecution },
+      {
+        type: 'tool-output-error',
+        toolExecution: {
+          ...toolFailedExecution,
+          errorCategory: 'INTERNAL_ERROR'
+        }
+      },
+      {
+        type: 'agent-error',
+        error: {
+          stage: 'TOOL',
+          errorCategory: 'INTERNAL_ERROR',
+          errorMessage: 'Tool execution failed'
+        }
+      }
     ]);
   });
 });

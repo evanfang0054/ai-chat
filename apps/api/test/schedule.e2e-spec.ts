@@ -53,8 +53,8 @@ describe('ScheduleController (e2e)', () => {
       ({ AgentService } = await import('../src/modules/agent/agent.service'));
       agentService = {
         streamChatReply: jest.fn(async function* () {
-          yield { type: 'text_delta', delta: 'Automated result' };
-          yield { type: 'run_completed' };
+          yield { type: 'text-delta', textDelta: 'Automated result' };
+          yield { type: 'finish' };
         })
       };
       const moduleRef = await Test.createTestingModule({
@@ -78,8 +78,8 @@ describe('ScheduleController (e2e)', () => {
     try {
       agentService.streamChatReply.mockReset();
       agentService.streamChatReply.mockImplementation(async function* () {
-        yield { type: 'text_delta', delta: 'Automated result' };
-        yield { type: 'run_completed' };
+        yield { type: 'text-delta', textDelta: 'Automated result' };
+        yield { type: 'finish' };
       });
       await prisma.scheduleRun.deleteMany();
       await prisma.schedule.deleteMany();
@@ -99,6 +99,19 @@ describe('ScheduleController (e2e)', () => {
     if (prisma) {
       await prisma.$disconnect();
     }
+  });
+
+  it('GET /health reports db redis and tick status', async () => {
+    const response = await request(app.getHttpServer()).get('/health').expect(200);
+
+    expect(response.body).toMatchObject({
+      ok: true,
+      checks: expect.objectContaining({
+        database: 'up',
+        redis: 'up',
+        scheduleTick: expect.any(String)
+      })
+    });
   });
 
   it('requires authentication for schedule and run routes', async () => {
@@ -379,6 +392,9 @@ describe('ScheduleController (e2e)', () => {
           scheduleId: 'owner-schedule',
           userId: owner.userId,
           status: 'SUCCEEDED',
+          stage: 'COMPLETED',
+          errorCategory: null,
+          triggerSource: 'SCHEDULE',
           taskPromptSnapshot: 'Owner prompt',
           resultSummary: 'Done',
           errorMessage: null,
@@ -392,6 +408,9 @@ describe('ScheduleController (e2e)', () => {
           scheduleId: 'owner-schedule',
           userId: owner.userId,
           status: 'FAILED',
+          stage: 'AGENT',
+          errorCategory: 'INTERNAL_ERROR',
+          triggerSource: 'SCHEDULE',
           taskPromptSnapshot: 'Owner prompt',
           resultSummary: null,
           errorMessage: 'Boom',
@@ -405,6 +424,9 @@ describe('ScheduleController (e2e)', () => {
           scheduleId: 'other-schedule',
           userId: otherUser.userId,
           status: 'SUCCEEDED',
+          stage: 'COMPLETED',
+          errorCategory: null,
+          triggerSource: 'SCHEDULE',
           taskPromptSnapshot: 'Other prompt',
           resultSummary: 'Should not leak',
           errorMessage: null,
@@ -427,6 +449,11 @@ describe('ScheduleController (e2e)', () => {
       scheduleId: 'owner-schedule',
       userId: owner.userId,
       status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      errorCategory: null,
+      triggerSource: 'SCHEDULE',
+      durationMs: 5000,
+      toolExecutionCount: 0,
       resultSummary: 'Done',
       errorMessage: null,
       schedule: {
@@ -469,6 +496,9 @@ describe('ScheduleController (e2e)', () => {
         scheduleId: 'detail-schedule',
         userId: owner.userId,
         status: 'FAILED',
+        stage: 'TOOL',
+        errorCategory: 'EXTERNAL_ERROR',
+        triggerSource: 'MANUAL_RETRY',
         taskPromptSnapshot: 'Detail prompt',
         resultSummary: null,
         errorMessage: 'Agent failed',
@@ -487,6 +517,11 @@ describe('ScheduleController (e2e)', () => {
     expect(response.body.run).toMatchObject({
       id: 'detail-run',
       status: 'FAILED',
+      stage: 'TOOL',
+      errorCategory: 'EXTERNAL_ERROR',
+      triggerSource: 'MANUAL_RETRY',
+      durationMs: 1000,
+      toolExecutionCount: 0,
       errorMessage: 'Agent failed',
       resultSummary: null,
       schedule: {

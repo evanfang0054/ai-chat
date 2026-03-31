@@ -1,4 +1,7 @@
-import type { CreateScheduleRequest, ScheduleRunStatus, ScheduleType } from '@ai-chat/shared';
+import type { ErrorCategory, RunStage, ScheduleRunStatus, ScheduleType } from '@ai-chat/shared';
+
+export type FailureCategory = ErrorCategory;
+export type ExecutionStage = RunStage;
 
 export type ScheduleInput = {
   type: ScheduleType;
@@ -30,6 +33,9 @@ interface ScheduleSummaryLikeBase {
   enabled: boolean;
   lastRunAt: Date | null;
   nextRunAt: Date | null;
+  latestRunStatus: ScheduleRunStatus | null;
+  latestFailureMessage: string | null;
+  latestResultSummary: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

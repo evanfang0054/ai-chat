@@ -1,14 +1,22 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type {
+  ErrorCategory,
   ToolExecutionFailedSummary,
   ToolExecutionRunningSummary,
   ToolExecutionSucceededSummary,
   ToolName
 } from '@ai-chat/shared';
+import { env } from '../../common/config/env';
 import { LlmService } from '../llm/llm.service';
 import { ToolService } from '../tool/tool.service';
-import type { AgentHistoryMessage, AgentStreamEvent, StreamChatReplyInput } from './agent.types';
+import type {
+  AgentExecutionContext,
+  AgentFailureDetails,
+  AgentHistoryMessage,
+  AgentStreamEvent,
+  StreamChatReplyInput
+} from './agent.types';
 
 const AGENT_SYSTEM_PROMPT = `You are a tool-using assistant inside an AI chat product.
 
@@ -37,28 +45,62 @@ class AgentToolExecutionFailedError extends Error {
 
 @Injectable()
 export class AgentService {
+  private readonly logger = new Logger(AgentService.name);
+
   constructor(
     private readonly llmService: LlmService,
     private readonly toolService: ToolService
   ) {}
 
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs);
+        if (typeof timer === 'object' && typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      })
+    ]);
+  }
+
   async *streamChatReply(input: StreamChatReplyInput): AsyncGenerator<AgentStreamEvent> {
+    const executionContext = this.buildExecutionContext(input);
+    this.logger.log('agent_reply_started', {
+      ...executionContext,
+      hasForcedToolCall: Boolean(input.forcedToolCall)
+    });
+
     if (input.forcedToolCall) {
       let hasOutput = false;
 
-      for await (const event of this.runToolCall(input.forcedToolCall.name, input.forcedToolCall.input, input)) {
-        if (event.type === 'text-delta' && event.textDelta) {
-          hasOutput = true;
+      try {
+        for await (const event of this.runToolCall(input.forcedToolCall.name, input.forcedToolCall.input, input)) {
+          if (event.type === 'text-delta' && event.textDelta) {
+            hasOutput = true;
+          }
+          yield event;
         }
-        yield event;
-      }
 
-      if (!hasOutput) {
-        throw new Error('Agent response was empty');
-      }
+        if (!hasOutput) {
+          throw new Error('Agent response was empty');
+        }
 
-      yield { type: 'finish' };
-      return;
+        this.logger.log('agent_reply_finished', {
+          ...executionContext,
+          finishReason: 'forced_tool_call_completed'
+        });
+        yield { type: 'finish' };
+        return;
+      } catch (error) {
+        const failure = this.toAgentFailureDetails(error);
+        this.logger.error('agent_reply_failed', {
+          ...executionContext,
+          ...failure
+        });
+        yield { type: 'agent-error', error: failure };
+        throw error;
+      }
     }
 
     const model = this.llmService.createChatModel();
@@ -68,35 +110,78 @@ export class AgentService {
       new HumanMessage(input.prompt)
     ];
 
-    const toolAwareModel = model.bindTools(this.createLangChainTools() as never, {
-      tool_choice: 'auto'
-    });
-    const response = await toolAwareModel.invoke(messages);
-    let hasOutput = false;
+    try {
+      const toolAwareModel = model.bindTools(this.createLangChainTools() as never, {
+        tool_choice: 'auto'
+      });
+      const response = await this.withTimeout(
+        toolAwareModel.invoke(messages),
+        env.CHAT_STREAM_TIMEOUT_MS,
+        'Agent LLM response'
+      );
+      let hasOutput = false;
 
-    const toolCalls = this.readToolCalls(response);
-    if (toolCalls.length > 0) {
-      for (const toolCall of toolCalls) {
-        for await (const event of this.runToolCall(toolCall.name, this.readToolCallInput(toolCall.args), input)) {
-          if (event.type === 'text-delta' && event.textDelta) {
-            hasOutput = true;
+      const toolCalls = this.readToolCalls(response);
+      if (toolCalls.length > 0) {
+        for (const toolCall of toolCalls) {
+          for await (const event of this.runToolCall(toolCall.name, this.readToolCallInput(toolCall.args), input)) {
+            if (event.type === 'text-delta' && event.textDelta) {
+              hasOutput = true;
+            }
+            yield event;
           }
-          yield event;
         }
       }
+
+      const text = toolCalls.length === 0 ? this.readChunkText(response.content) : '';
+      if (text) {
+        hasOutput = true;
+        yield { type: 'text-delta', textDelta: text };
+      }
+
+      if (!hasOutput) {
+        throw new Error('Agent response was empty');
+      }
+
+      this.logger.log('agent_reply_finished', {
+        ...executionContext,
+        finishReason: toolCalls.length > 0 ? 'tool_call_completed' : 'text_completed'
+      });
+      yield { type: 'finish' };
+    } catch (error) {
+      const failure = this.toAgentFailureDetails(error);
+      this.logger.error('agent_reply_failed', {
+        ...executionContext,
+        ...failure
+      });
+      yield { type: 'agent-error', error: failure };
+      throw error;
+    }
+  }
+
+  private buildExecutionContext(input: StreamChatReplyInput): AgentExecutionContext {
+    return {
+      userId: input.userId,
+      sessionId: input.sessionId,
+      scheduleId: input.scheduleId ?? null,
+      runId: input.runId ?? null
+    };
+  }
+
+  private toAgentFailureDetails(error: unknown): AgentFailureDetails {
+    if (error instanceof AgentToolExecutionFailedError) {
+      return {
+        stage: 'TOOL',
+        errorCategory: error.execution.errorCategory,
+        errorMessage: error.execution.errorMessage
+      };
     }
 
-    const text = toolCalls.length === 0 ? this.readChunkText(response.content) : '';
-    if (text) {
-      hasOutput = true;
-      yield { type: 'text-delta', textDelta: text };
-    }
-
-    if (!hasOutput) {
-      throw new Error('Agent response was empty');
-    }
-
-    yield { type: 'finish' };
+    return {
+      stage: 'LLM',
+      errorCategory: 'INTERNAL_ERROR',
+      errorMessage: error instanceof Error ? error.message : 'Agent execution failed'
+    };
   }
 
   private createLangChainTools() {
@@ -112,16 +197,29 @@ export class AgentService {
     toolInput: Record<string, unknown>,
     context: StreamChatReplyInput
   ): AsyncGenerator<AgentStreamEvent> {
+    const executionContext = this.buildExecutionContext(context);
     const started = await this.toolService.startToolExecution(name, toolInput, {
       sessionId: context.sessionId,
-      userId: context.userId
+      userId: context.userId,
+      scheduleId: context.scheduleId,
+      runId: context.runId
     });
 
+    this.logger.log('agent_tool_call_started', {
+      ...executionContext,
+      toolName: name,
+      toolExecutionId: started.execution.id
+    });
     yield { type: 'tool-input-start', toolExecution: this.toRunningExecutionSummary(started.execution) };
     yield { type: 'tool-input-available', toolExecution: this.toRunningExecutionSummary(started.execution) };
 
     try {
-      const result = await started.run();
+      const result = await this.withTimeout(started.run(), env.TOOL_EXECUTION_TIMEOUT_MS, `Agent tool call (${name})`);
+      this.logger.log('agent_tool_call_succeeded', {
+        ...executionContext,
+        toolName: name,
+        toolExecutionId: result.execution.id
+      });
       yield {
         type: 'tool-output-available',
         toolExecution: this.toSucceededExecutionSummary(result.execution)
@@ -132,12 +230,22 @@ export class AgentService {
         yield { type: 'text-delta', textDelta: response };
       }
     } catch (error) {
-      const execution = this.readExecutionFromError(error);
-      if (!execution) {
+      const executionWithCategory = this.readExecutionFromError(error);
+      if (!executionWithCategory) {
         throw error;
       }
 
-      const failedSummary = this.toFailedExecutionSummary(execution);
+      const failedSummary = this.toFailedExecutionSummary(
+        executionWithCategory.execution,
+        executionWithCategory.category
+      );
+      this.logger.error('agent_tool_call_failed', {
+        ...executionContext,
+        toolName: name,
+        toolExecutionId: failedSummary.id,
+        errorCategory: failedSummary.errorCategory,
+        errorMessage: failedSummary.errorMessage
+      });
       yield {
         type: 'tool-output-error',
         toolExecution: failedSummary
@@ -183,6 +291,7 @@ export class AgentService {
       status: 'RUNNING',
       input: this.toNullableJsonString(execution.input),
       output: null,
+      errorCategory: null,
       errorMessage: null,
       startedAt: this.toIsoString(execution.startedAt),
       finishedAt: null
@@ -212,23 +321,27 @@ export class AgentService {
       status: 'SUCCEEDED',
       input: this.toNullableJsonString(execution.input),
       output: this.toNullableJsonString(execution.output),
+      errorCategory: null,
       errorMessage: null,
       startedAt: this.toIsoString(execution.startedAt),
       finishedAt: this.toIsoString(finishedAt)
     };
   }
 
-  private toFailedExecutionSummary(execution: {
-    id: string;
-    sessionId: string;
-    toolName: string;
-    status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-    input: unknown;
-    output: unknown;
-    errorMessage: string | null;
-    startedAt: Date | string;
-    finishedAt: Date | string | null;
-  }): ToolExecutionFailedSummary {
+  private toFailedExecutionSummary(
+    execution: {
+      id: string;
+      sessionId: string;
+      toolName: string;
+      status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+      input: unknown;
+      output: unknown;
+      errorMessage: string | null;
+      startedAt: Date | string;
+      finishedAt: Date | string | null;
+    },
+    errorCategory: ErrorCategory
+  ): ToolExecutionFailedSummary {
     const finishedAt = execution.finishedAt;
     if (finishedAt === null) {
       throw new Error('Failed tool execution is missing finishedAt');
@@ -241,6 +354,7 @@ export class AgentService {
       status: 'FAILED',
       input: this.toNullableJsonString(execution.input),
       output: this.toNullableJsonString(execution.output),
+      errorCategory,
       errorMessage: execution.errorMessage ?? 'Tool execution failed',
       startedAt: this.toIsoString(execution.startedAt),
       finishedAt: this.toIsoString(finishedAt)
@@ -248,8 +362,8 @@ export class AgentService {
   }
 
   private readExecutionFromError(error: unknown) {
-    if (typeof error === 'object' && error !== null && 'execution' in error) {
-      return (error as {
+    if (typeof error === 'object' && error !== null && 'execution' in error && 'category' in error) {
+      return error as {
         execution: {
           id: string;
           sessionId: string;
@@ -261,7 +375,8 @@ export class AgentService {
           startedAt: Date | string;
           finishedAt: Date | string | null;
         };
-      }).execution;
+        category: ErrorCategory;
+      };
     }
 
     return null;

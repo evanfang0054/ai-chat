@@ -3,7 +3,12 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 
 import { env } from '../../common/config/env';
-import { SCHEDULE_TICK_JOB, SCHEDULE_TICK_JOB_ID, SCHEDULE_TICK_QUEUE } from '../../common/queue/queue.constants';
+import {
+  SCHEDULE_TICK_INSTANCE,
+  SCHEDULE_TICK_JOB,
+  SCHEDULE_TICK_JOB_ID,
+  SCHEDULE_TICK_QUEUE
+} from '../../common/queue/queue.constants';
 
 @Injectable()
 export class ScheduleTickBootstrapService implements OnModuleInit {
@@ -12,8 +17,16 @@ export class ScheduleTickBootstrapService implements OnModuleInit {
   constructor(@InjectQueue(SCHEDULE_TICK_QUEUE) private readonly queue: Queue) {}
 
   async onModuleInit() {
+    this.logger.log('schedule_tick_bootstrap_started', {
+      instanceId: SCHEDULE_TICK_INSTANCE,
+      queueName: SCHEDULE_TICK_QUEUE
+    });
+
     if (process.env.ENABLE_SCHEDULE_TICK !== 'true') {
-      this.logger.debug('Skip schedule tick bootstrap because ENABLE_SCHEDULE_TICK is not true');
+      this.logger.debug('Skip schedule tick bootstrap because ENABLE_SCHEDULE_TICK is not true', {
+        instanceId: SCHEDULE_TICK_INSTANCE,
+        queueName: SCHEDULE_TICK_QUEUE
+      });
       return;
     }
 
@@ -30,6 +43,11 @@ export class ScheduleTickBootstrapService implements OnModuleInit {
       }
     );
 
-    this.logger.log(`Ensured schedule tick job every ${everyMs}ms`);
+    this.logger.log('schedule_tick_bootstrap_ready', {
+      instanceId: SCHEDULE_TICK_INSTANCE,
+      queueName: SCHEDULE_TICK_QUEUE,
+      everyMs,
+      note: 'Tick may be consumed by another API instance if Redis is shared.'
+    });
   }
 }

@@ -5,6 +5,7 @@ process.env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || 'test-key';
 process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
 process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
+import { Logger } from '@nestjs/common';
 import type { AgentStreamEvent } from '../agent/agent.types';
 
 describe('ScheduleRunnerService', () => {
@@ -52,13 +53,26 @@ describe('ScheduleRunnerService', () => {
         jest.advanceTimersByTime(advanceMs);
       }
       for (const chunk of textChunks) {
-        yield { type: 'text_delta' as const, delta: chunk };
+        yield { type: 'text-delta' as const, textDelta: chunk };
       }
-      yield { type: 'run_completed' as const };
+      yield { type: 'finish' as const };
     })();
   }
 
+  function makeHangingAgentStream(): AsyncGenerator<AgentStreamEvent> {
+    return (async function* () {
+      await new Promise(() => undefined);
+    })();
+  }
+
+  let debugSpy: jest.SpyInstance;
+  let logSpy: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
+
   beforeEach(() => {
+    debugSpy = jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+    logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     jest.useFakeTimers();
     jest.setSystemTime(now);
   });
@@ -176,6 +190,8 @@ describe('ScheduleRunnerService', () => {
         scheduleId: dueSchedule.id,
         userId: dueSchedule.userId,
         status: 'RUNNING',
+        stage: 'AGENT',
+        triggerSource: 'SCHEDULE',
         taskPromptSnapshot: dueSchedule.taskPrompt,
         startedAt: now
       }
@@ -187,7 +203,10 @@ describe('ScheduleRunnerService', () => {
       userId: dueSchedule.userId,
       sessionId: 'session-1',
       history: [],
-      prompt: dueSchedule.taskPrompt
+      prompt: dueSchedule.taskPrompt,
+      forcedToolCall: undefined,
+      scheduleId: dueSchedule.id,
+      runId: createdRun.id
     });
 
     expect(chatService.saveAssistantMessage).toHaveBeenCalledWith('session-1', 'done');
@@ -196,11 +215,32 @@ describe('ScheduleRunnerService', () => {
       where: { id: createdRun.id },
       data: {
         status: 'SUCCEEDED',
+        stage: 'COMPLETED',
+        errorCategory: null,
         resultSummary: 'done',
         chatSessionId: 'session-1',
         finishedAt
       }
     });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      'schedule_runner_execution_started',
+      {
+        scheduleId: dueSchedule.id,
+        runId: createdRun.id,
+        userId: dueSchedule.userId
+      }
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      'schedule_runner_execution_succeeded',
+      {
+        scheduleId: dueSchedule.id,
+        runId: createdRun.id,
+        userId: dueSchedule.userId,
+        sessionId: 'session-1',
+        resultSummaryLength: 4
+      }
+    );
 
     expect(updateSchedule).toHaveBeenCalledWith({
       where: { id: dueSchedule.id },
@@ -246,6 +286,13 @@ describe('ScheduleRunnerService', () => {
     await service.processDueSchedules();
 
     expect(updateMany).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'schedule_runner_claim_skipped',
+      {
+        scheduleId: dueSchedule.id,
+        userId: dueSchedule.userId
+      }
+    );
     expect(createRun).not.toHaveBeenCalled();
     expect(chatService.createSessionWithFirstMessage).not.toHaveBeenCalled();
   });
@@ -334,11 +381,130 @@ describe('ScheduleRunnerService', () => {
       where: { id: createdRun.id },
       data: {
         status: 'FAILED',
+        stage: 'AGENT',
+        errorCategory: 'INTERNAL_ERROR',
         errorMessage: 'Agent failed',
         chatSessionId: 'session-2',
         finishedAt
       }
     });
+    expect(warnSpy).toHaveBeenCalledWith(
+      'schedule_runner_execution_failed',
+      {
+        scheduleId: dueSchedule.id,
+        runId: createdRun.id,
+        userId: dueSchedule.userId,
+        sessionId: 'session-2',
+        stage: 'AGENT',
+        errorCategory: 'INTERNAL_ERROR',
+        errorMessage: 'Agent failed'
+      }
+    );
+  });
+
+  it('marks run as FAILED when schedule execution times out', async () => {
+    const dueSchedule = createScheduleRecord({
+      id: 'schedule-timeout',
+      taskPrompt: 'Summarize unread issues slowly'
+    });
+    const createdRun = {
+      id: 'run-timeout',
+      scheduleId: dueSchedule.id,
+      userId: dueSchedule.userId,
+      status: 'RUNNING' as const,
+      taskPromptSnapshot: dueSchedule.taskPrompt,
+      resultSummary: null,
+      errorMessage: null,
+      chatSessionId: null,
+      startedAt: now,
+      finishedAt: null,
+      createdAt: now
+    };
+
+    const findMany = jest.fn().mockResolvedValue([dueSchedule]);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const createRun = jest.fn().mockResolvedValue(createdRun);
+    const updateRun = jest.fn().mockResolvedValue({
+      ...createdRun,
+      status: 'FAILED',
+      errorMessage: `Schedule run (${dueSchedule.id}) timeout`,
+      chatSessionId: 'session-timeout',
+      finishedAt: new Date('2026-03-27T09:03:00.000Z')
+    });
+
+    const prisma = {
+      schedule: {
+        findMany,
+        updateMany,
+        update: jest.fn().mockResolvedValue({
+          ...dueSchedule,
+          enabled: false,
+          lastRunAt: now,
+          nextRunAt: null
+        })
+      },
+      scheduleRun: {
+        create: createRun,
+        update: updateRun
+      }
+    };
+
+    const chatService = {
+      createSessionWithFirstMessage: jest.fn().mockResolvedValue({
+        session: {
+          id: 'session-timeout',
+          userId: dueSchedule.userId,
+          title: dueSchedule.title,
+          model: 'deepseek-chat',
+          createdAt: now,
+          updatedAt: now
+        },
+        userMessage: {
+          id: 'msg-timeout-user',
+          sessionId: 'session-timeout',
+          role: 'USER',
+          content: dueSchedule.taskPrompt,
+          createdAt: now
+        }
+      }),
+      saveAssistantMessage: jest.fn()
+    };
+
+    const agentService = {
+      streamChatReply: jest.fn().mockImplementation(() => makeHangingAgentStream())
+    };
+
+    const { ScheduleRunnerService } = await import('./schedule-runner.service');
+    const service = new ScheduleRunnerService(prisma as never, chatService as never, agentService as never);
+
+    const processPromise = service.processDueSchedules();
+    await jest.advanceTimersByTimeAsync(180000);
+    await processPromise;
+
+    expect(chatService.saveAssistantMessage).not.toHaveBeenCalled();
+    expect(updateRun).toHaveBeenCalledWith({
+      where: { id: createdRun.id },
+      data: {
+        status: 'FAILED',
+        stage: 'AGENT',
+        errorCategory: 'EXTERNAL_ERROR',
+        errorMessage: `Schedule run (${dueSchedule.id}) timeout`,
+        chatSessionId: 'session-timeout',
+        finishedAt: expect.any(Date)
+      }
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      'schedule_runner_execution_failed',
+      {
+        scheduleId: dueSchedule.id,
+        runId: createdRun.id,
+        userId: dueSchedule.userId,
+        sessionId: 'session-timeout',
+        stage: 'AGENT',
+        errorCategory: 'EXTERNAL_ERROR',
+        errorMessage: `Schedule run (${dueSchedule.id}) timeout`
+      }
+    );
   });
 
   it('forces get_current_time for schedule prompts that ask to call get_current_time', async () => {
@@ -421,7 +587,9 @@ describe('ScheduleRunnerService', () => {
       forcedToolCall: {
         name: 'get_current_time',
         input: { timezone: 'UTC' }
-      }
+      },
+      scheduleId: dueSchedule.id,
+      runId: createdRun.id
     });
   });
 
@@ -502,7 +670,9 @@ describe('ScheduleRunnerService', () => {
       sessionId: 'session-no-force',
       history: [],
       prompt: dueSchedule.taskPrompt,
-      forcedToolCall: undefined
+      forcedToolCall: undefined,
+      scheduleId: dueSchedule.id,
+      runId: createdRun.id
     });
   });
 
