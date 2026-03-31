@@ -1372,7 +1372,7 @@ pnpm db:down
 - Extra services/processes: STOPPED
 ```
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add docs/superpowers/plans/2026-03-31-unified-improvement.md docs/superpowers/plans/2026-03-31-unified-improvement-report.md
