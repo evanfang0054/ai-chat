@@ -1,20 +1,28 @@
-# ai-chat 项目方案汇总
+# ai-chat 项目总览
 
-## 1. 项目目标
+## 1. 项目定位
 
-构建一个基于 **NestJS + LangChainJS** 的 AI 聊天项目，要求：
+`ai-chat` 是一个基于 **NestJS + React + LangChainJS** 的 AI 聊天平台，采用 **pnpm workspace + Turborepo** 的 monorepo 架构。
 
-- 支持多轮聊天
-- 支持接入 Tool
-- 支持定时任务
-- 支持 Web 端
-- 前后端同仓库，采用 **Monorepo** 架构
-- 使用 **pnpm** 管理工作区
-- Node 版本要求 **>= 20**
+项目目标是构建一个可持续扩展的 AI 应用基础平台，当前核心围绕三条主线展开：
+
+- 聊天：支持多轮会话、流式响应、Tool 调用与执行状态展示
+- 调度：支持定时任务创建、自动触发、执行记录与结果追踪
+- 权限：支持本地账号体系、JWT 鉴权与基础 RBAC
+
+该文档的角色是**仓库顶层总览文档**：
+
+- 说明项目目标与核心选型
+- 总结当前已实现能力
+- 描述当前真实架构与关键链路
+- 给出当前阶段的后续方向
+- 作为详细设计与实施文档的入口
+
+当本文档与代码实现不一致时，**以当前代码为准**。
 
 ---
 
-## 2. 最终选型
+## 2. 技术选型
 
 ### 后端
 - NestJS
@@ -34,7 +42,7 @@
 - Zustand
 - TanStack Query
 - React Router
-- shadcn/ui（建议）
+- shadcn/ui 风格组件体系
 
 ### 工程化
 - pnpm workspace
@@ -43,623 +51,341 @@
 
 ---
 
-## 3. 总体方案
+## 3. 为什么采用这套方案
 
-最终采用：
+本项目采用：
 
 **pnpm monorepo + NestJS API + React Web + LangChainJS + PostgreSQL + Redis + BullMQ + SSE**
 
-这是一个兼顾：
-- 可快速开发
-- 可正式上线
-- 易扩展
-- 易维护
+这样选择的原因是：
 
-的标准生产版架构。
+- 既能支撑聊天、Tool、Schedule 这类 AI 产品核心链路
+- 又能保持模块边界清晰，不必过早引入复杂平台化抽象
+- 前后端同仓库开发，便于共享类型、统一脚本与联调
+- PostgreSQL 适合作为核心业务数据真相源，Redis/BullMQ 适合作为异步触发与队列基础设施
+- SSE 足够支撑当前聊天流式输出场景，接入成本低，链路清晰
 
----
-
-## 4. 为什么选方案 B
-
-方案 B 是标准生产版，相比简单方案更适合正式项目，因为它具备：
-
-- 多会话聊天能力
-- Tool Calling 能力
-- 定时任务 / 延迟任务能力
-- 任务状态跟踪
-- 审计日志
-- 失败重试
-- 多实例部署扩展能力
-
-核心优势：
-- 比方案 A 更适合生产
-- 比方案 C 更不容易过度设计
+相对更轻的方案，这套架构更适合持续演进；相对更重的平台化方案，它又能避免当前阶段的过度设计。
 
 ---
 
-## 5. Monorepo 架构设计
+## 4. 当前项目现状
 
-推荐目录：
+当前仓库已经不处于“项目初始化”阶段，而是进入了**基础闭环已完成、持续演进与收口并行**的阶段。
+
+当前已具备的主能力包括：
+
+### 4.1 Auth / User
+- 用户注册与登录
+- `JWT` 鉴权
+- `ADMIN` / `USER` 基础角色控制
+- 前端登录态持久化
+- 受保护路由与管理员路由
+
+### 4.2 Chat
+- 聊天会话列表查询
+- 历史消息查询
+- `POST /chat/stream` 流式聊天接口
+- 服务端 SSE 流式返回执行过程
+- 聊天页流式消息渲染
+- 会话侧栏与当前会话切换
+
+### 4.3 Tool Execution
+- Agent 可调用内置 Tool
+- Tool execution 状态会在后端持久化
+- 前端聊天页可展示 Tool 的运行中 / 成功 / 失败状态
+- Tool execution 不只是前端临时展示，而是完整链路的一部分
+
+### 4.4 Schedule / Runs
+- Schedule 的创建、编辑、启用、停用、删除
+- 自动 tick 扫描与执行 due schedules
+- `ScheduleRun` 持久化与状态追踪
+- `/schedules` 与 `/runs` 页面
+- run 与 chat session 的关联可见
+
+### 4.5 Web 端
+- 登录页
+- Chat 页面
+- Dashboard 页面
+- Schedules 页面
+- Runs 页面
+- Admin 页面
+- 统一 app shell 与最近一轮 Web UX 刷新
+
+### 4.6 Shared Contracts
+- `packages/shared` 已作为前后端契约层
+- 统一导出 `auth`、`user`、`chat`、`tool`、`schedule` 等共享类型
+
+---
+
+## 5. 当前目录结构与职责
 
 ```txt
 ai-chat/
 ├─ apps/
-│  ├─ api/                 # NestJS 后端
+│  ├─ api/                 # NestJS 后端 API
 │  └─ web/                 # React + Vite 前端
 ├─ packages/
-│  ├─ shared/              # 前后端共享类型/schema/常量
-│  ├─ ui/                  # 可复用 UI 组件（可选）
+│  ├─ shared/              # 前后端共享类型/契约
 │  ├─ eslint-config/       # 统一 lint 配置
 │  └─ tsconfig/            # 统一 tsconfig 配置
 ├─ infra/
-│  ├─ docker/
-│  └─ compose.yaml         # postgres / redis 等本地依赖
+│  └─ compose.yaml         # 本地 PostgreSQL / Redis 依赖
+├─ docs/                   # 设计文档与实施计划
+├─ PROJECT_PLAN.md         # 仓库顶层总览
 ├─ package.json
 ├─ pnpm-workspace.yaml
-├─ turbo.json
-└─ README.md
+└─ turbo.json
 ```
-
----
-
-## 6. apps 说明
 
 ### apps/api
-NestJS 后端应用，负责：
-
-- 聊天接口
-- 会话管理
-- Tool 调度
-- LLM 调用
-- 定时任务管理
-- BullMQ Worker
-- SSE 流式输出
-- 审计日志
-
-推荐模块：
-
-```txt
-apps/api/src/modules/
-├─ auth/
-├─ users/
-├─ chat/
-├─ agent/
-├─ tool/
-├─ llm/
-├─ schedule/
-├─ task/
-├─ memory/
-└─ audit/
-```
+负责：
+- 用户与认证
+- 聊天与消息查询
+- SSE 流式聊天
+- Agent / LLM / Tool 调用
+- Schedule 与 Run 管理
+- tick 调度触发
 
 ### apps/web
-React 前端应用，负责：
-
-- 登录/鉴权
-- 聊天页面
-- Tool 调用可视化
-- 定时任务管理
-- 执行记录展示
-- 基础配置页面
-
-推荐目录：
-
-```txt
-apps/web/src/
-├─ pages/
-│  ├─ login/
-│  ├─ chat/
-│  ├─ schedules/
-│  ├─ runs/
-│  └─ settings/
-├─ components/
-│  ├─ chat/
-│  ├─ schedule/
-│  ├─ common/
-│  └─ layout/
-├─ stores/
-├─ hooks/
-├─ services/
-├─ lib/
-└─ router/
-```
-
----
-
-## 7. packages 说明
+负责：
+- 登录与鉴权态
+- 聊天工作台
+- Tool execution 可视化
+- Schedules 管理
+- Runs 查看
+- Dashboard / Admin 等页面
 
 ### packages/shared
-放前后端共用内容：
-
-- DTO 类型
-- zod schema
-- API 响应类型
-- 枚举
-- Tool 输入输出类型
-- Schedule payload 类型
-
-推荐结构：
-
-```txt
-packages/shared/src/
-├─ api.ts
-├─ chat.ts
-├─ schedule.ts
-├─ tool.ts
-└─ index.ts
-```
-
-### packages/ui
-可选，用于后期抽通用组件：
-
-- Button
-- Input
-- ChatMessage
-- ToolBadge
-- LoadingDots
-
-MVP 阶段可以先不拆。
-
----
-
-## 8. 前端架构建议
-
-### 状态管理
-
-#### Zustand 负责
-- 登录态
-- 当前会话 ID
-- 聊天输入草稿
-- 流式输出中的临时状态
-- 纯前端 UI 状态
-
-#### TanStack Query 负责
-- 会话列表
-- 历史消息
-- 定时任务列表
-- 任务执行记录
-- 系统配置
-
-原则：
-- 服务端数据：TanStack Query
-- 本地交互状态：Zustand
-
-### 前端核心页面
-
-#### 1. 聊天页 `/chat`
-- 会话列表
-- 消息流
-- 输入框
-- 模型切换
-- Tool 调用状态展示
-
-#### 2. 定时任务页 `/schedules`
-- 创建任务
-- cron 表达式输入
-- 一次性任务创建
-- 任务启停
-- 下次执行时间展示
-
-#### 3. 执行记录页 `/runs`
-- 每次任务运行状态
-- 输入参数
-- 输出结果
-- 错误日志
-
-#### 4. 设置页 `/settings`
-- 默认模型
-- 温度
-- 最大步数
-- 默认 system prompt
-- Tool 开关
-
-### 聊天页面组件建议
-
-```txt
-ChatPage
-├─ SessionSidebar
-├─ ChatHeader
-├─ MessageList
-│  ├─ UserMessage
-│  ├─ AssistantMessage
-│  ├─ ToolCallCard
-│  └─ ToolResultCard
-├─ Composer
-└─ ModelSelector
-```
-
----
-
-## 9. 后端架构建议
-
-### LLM 层
-建议封装统一 provider 抽象：
-
-```ts
-interface ChatModelProvider {
-  invoke(input: ModelInput): Promise<ModelOutput>;
-  stream(input: ModelInput): AsyncIterable<ModelChunk>;
-}
-```
-
-实现类可包括：
-- OpenAIProvider
-- AnthropicProvider
-- OpenAICompatibleProvider
-
-这样后续切换模型厂商更方便。
-
-### Agent 层
 负责：
-- 构造 system prompt
-- 拉取聊天历史
-- 注入 tools
-- 调用 LangChainJS
-- 处理 tool calling
-- 控制最大 steps
-- 返回最终结果
+- 前后端共享 DTO / 响应类型 / 业务枚举
+- 统一契约导出，避免两端重复维护
 
-建议拆成：
-- PromptBuilderService
-- ToolExecutorService
-- AgentRunnerService
-
-### Tool 层
-推荐建立 ToolRegistry：
-
-```ts
-ToolRegistry
-- getAllTools()
-- getTool(name)
-- getToolsForUser(userId)
-```
-
-每个 Tool 独立一个文件，避免集中堆积。
-
-推荐示例：
-
-```txt
-tool/tools/
-├─ get-current-time.tool.ts
-├─ search-knowledge.tool.ts
-├─ create-schedule-task.tool.ts
-├─ query-task-runs.tool.ts
-└─ send-notification.tool.ts
-```
-
----
-
-## 10. 定时任务方案
-
-既然选择方案 B，推荐直接使用：
-
-- **BullMQ + Redis**
-
-不建议只依赖 `@nestjs/schedule`，因为后期会遇到：
-- 多实例重复执行
-- 重试不足
-- 任务状态难管理
-- 延迟任务支持弱
-- 幂等控制不足
-
-### 模块职责拆分
-
-#### schedule 模块
+### infra
 负责：
-- 创建 cron 规则
-- 校验表达式
-- 更新/暂停/删除任务
-- 管理 repeatable jobs
+- 本地开发依赖：PostgreSQL 16、Redis 7
 
-#### task 模块
-负责：
-- 执行 AI 任务
-- 记录运行日志
-- 失败重试
-- 结果通知
+---
 
-### 队列建议
+## 6. 当前真实架构
 
-```txt
-queues/
-├─ chat.queue.ts
-├─ ai-task.queue.ts
-├─ notification.queue.ts
-└─ cleanup.queue.ts
+## 6.1 API 由 auth + chat + schedule 三条主线组成
+当前后端不是单一 auth 骨架，而是已经接入：
+
+- `PrismaModule`
+- `QueueModule`
+- `UsersModule`
+- `AuthModule`
+- `ChatModule`
+- `ScheduleModule`
+- `HealthController`
+
+因此新增能力时，优先沿现有模块边界扩展，而不是重新搭一层大而全的抽象。
+
+## 6.2 Chat 主链路是 `chat -> agent -> llm/tool`
+当前聊天入口在 `chat` 模块，核心职责是：
+
+- 查询 session 列表
+- 查询某个 session 的消息
+- 接收聊天输入并返回流式响应
+
+继续向下的真实执行链路是：
+
+`chat -> agent -> llm/tool`
+
+也就是说：
+- `chat` 负责 API 入口与持久化组织
+- `agent` 负责执行编排
+- `llm` 负责模型调用
+- `tool` 负责工具注册、执行与结果回传
+
+## 6.3 Tool execution 已经落库
+当前 Tool 调用不是纯内存事件。
+
+真实链路包括：
+- Agent 触发 Tool
+- Tool execution 记录持久化
+- SSE 把执行状态回推前端
+- 前端聊天页展示工具执行过程
+
+因此涉及 Tool 改动时，需要同时关注：
+- agent 事件
+- tool service
+- shared 类型
+- web 聊天消费逻辑
+
+## 6.4 Schedule 的真相源是数据库，不是 BullMQ
+这是当前项目中非常关键的架构边界。
+
+当前 schedule 业务核心在数据库：
+
+- `ScheduleService` 负责 CRUD、enable / disable、`nextRunAt` 维护
+- `ScheduleRunnerService.processDueSchedules(now)` 负责扫描 due schedules、claim、创建 run、调用现有 chat/agent 执行链路
+- `QueueModule` 负责 Redis / BullMQ 连接与全局 `schedule-tick` queue
+- `ScheduleTickBootstrapService` 负责确保存在唯一 repeatable tick job
+- `ScheduleTickProcessor` 只负责周期性唤醒 `processDueSchedules(new Date())`
+
+因此：
+- BullMQ 不是每个 schedule 的独立真相源
+- processor 也不应复制业务调度逻辑
+
+## 6.5 Web 聊天状态当前以 Zustand 为中心
+当前聊天主页面在 `apps/web/src/pages/chat/ChatPage.tsx`，聊天状态中心在 `apps/web/src/stores/chat-store.ts`。
+
+当前职责分工是：
+- 会话列表、当前会话、消息、toolExecutions、streaming 状态集中在 store
+- `ChatPage` 负责订阅 SSE 并分发事件
+- 展示组件只负责渲染，不负责拼装流式状态
+
+如果后续聊天协议升级，这一层可能继续调整；但当前真实实现仍以现有 store + SSE 分发链路为准。
+
+## 6.6 Shared package 是契约层
+凡是前后端都要消费的 DTO、响应结构、聊天/工具/调度类型，优先放在 `packages/shared`。
+
+这一层的目标是：
+- 保持 API 与 Web 契约一致
+- 避免两端重复定义
+- 降低联调时的结构漂移
+
+---
+
+## 7. 关键链路说明
+
+## 7.1 认证链路
+后端认证入口：
+- `POST /auth/register`
+- `POST /auth/login`
+- `GET /auth/me`
+
+前端认证状态在 Zustand store 中持久化，并通过受保护路由与角色路由控制页面访问。
+
+## 7.2 聊天链路
+核心接口：
+- `GET /chat/sessions`
+- `GET /chat/sessions/:sessionId/messages`
+- `POST /chat/stream`
+
+当前 SSE 事件会覆盖运行开始、Tool 执行、文本增量、运行完成/失败等阶段。
+
+## 7.3 调度链路
+Schedule 主链路是：
+
+`schedule -> schedule-run -> chat -> agent -> llm/tool`
+
+也就是说，schedule 是“时间触发入口”，真正的 AI 执行仍复用现有聊天执行链。
+
+## 7.4 路由保护
+当前前端路由分为两层：
+- 登录态保护：`/chat`、`/dashboard`、`/schedules`、`/runs`
+- 角色保护：`/admin` 需要 `ADMIN`
+
+---
+
+## 8. 本地开发与联调约定
+
+## 8.1 常用命令
+### 根目录
+```bash
+pnpm install
+pnpm dev
+pnpm build
+pnpm lint
+pnpm test
+pnpm format
+pnpm db:up
+pnpm db:down
 ```
 
----
+### 按 workspace 运行
+```bash
+pnpm --filter @ai-chat/api dev
+pnpm --filter @ai-chat/api build
+pnpm --filter @ai-chat/api lint
+pnpm --filter @ai-chat/api test
+pnpm --filter @ai-chat/api test:e2e
 
-## 11. AI + 定时任务结合方式
-
-### 1）到点主动执行 AI 任务
-例如：
-- 每天总结昨天工单
-- 每小时巡检日志并生成摘要
-- 每周自动生成周报
-
-执行链路：
-
-```txt
-Cron/BullMQ -> Task Worker -> AgentService -> Tool调用 -> 结果存库/通知用户
+pnpm --filter @ai-chat/web dev
+pnpm --filter @ai-chat/web build
+pnpm --filter @ai-chat/web lint
+pnpm --filter @ai-chat/web test
 ```
 
-### 2）聊天中创建定时任务
-例如用户输入：
-- 每天 9 点提醒我看销售数据
-- 每周一帮我总结上周报错
+## 8.2 本地环境
+- Node 版本目标：`>= 20`
+- 包管理器：`pnpm@10`
+- API 默认端口：`3000`
+- Web 默认端口：`5170`
+- 本地依赖由 `infra/compose.yaml` 提供：PostgreSQL、Redis
 
-此时 AI 可调用 `create_schedule_task` tool。
+典型启动顺序：
+1. 准备环境变量
+2. `pnpm db:up`
+3. `pnpm install`
+4. `pnpm --filter @ai-chat/api db:generate`
+5. `pnpm --filter @ai-chat/api db:migrate`
+6. `pnpm --filter @ai-chat/api db:seed`
+7. `pnpm dev`
 
-### 3）条件触发后的延迟任务
-例如：
-- 提交后 30 分钟自动跟进
-- 某事件发生 10 分钟后自动分析
-
-这种场景非常适合 BullMQ delayed job。
-
----
-
-## 12. 数据库表建议
-
-建议至少包含以下表：
-
-### 用户与聊天
-- `users`
-- `chat_sessions`
-- `chat_messages`
-
-### 工具审计
-- `tool_call_logs`
-
-### 定时任务
-- `scheduled_jobs`
-- `task_runs`
-
-### 可选扩展
-- `model_configs`
-- `knowledge_bases`
-- `attachments`
+## 8.3 联调注意点
+- 在启动新服务前，先确认目标端口和相关进程是否已有可复用服务
+- 如果本地同时跑多套 API，且共用同一个 Redis，则 schedule tick 可能被任意实例消费
+- 排查 schedule / runs / LLM 配置异常时，优先确认：
+  1. Web 实际命中的 API 地址
+  2. 当前有哪些 API 端口仍存活
+  3. 哪些实例连接了同一个 Redis 并启用了 tick
+- 回答“现在系统如何工作”时，以代码为准；规划“下一步怎么扩展”时，再参考 docs
 
 ---
 
-## 13. API 设计建议
+## 9. 当前阶段的缺口与后续方向
 
-### 聊天接口
-- `POST /api/chat/sessions`
-- `GET /api/chat/sessions`
-- `GET /api/chat/sessions/:id/messages`
-- `POST /api/chat/sessions/:id/messages`
-- `GET /api/chat/sessions/:id/stream`
+当前仓库主闭环已经具备，但仍有一批明确缺口与下一阶段演进方向。
 
-### 定时任务接口
-- `POST /api/schedules`
-- `GET /api/schedules`
-- `PATCH /api/schedules/:id`
-- `DELETE /api/schedules/:id`
-- `POST /api/schedules/:id/pause`
-- `POST /api/schedules/:id/resume`
-- `GET /api/schedules/:id/runs`
+### 9.1 已识别缺口
+- `settings` 页面尚未实现
+- `audit log` 模块与持久化尚未实现
+- `refresh token` 机制尚未实现
+- 部分早期文档仍停留在初始化或 MVP 阶段，需要继续同步
 
-### 工具接口
-- `GET /api/tools`
-- `GET /api/tool-call-logs`
+### 9.2 已进入或值得优先推进的方向
+- 聊天协议与前端聊天体验继续升级
+- agent-driven 执行层与 Tool 体系补强
+- schedule / runs 的产品可用性继续打磨
+- 错误追踪、限流、timeout、结构化日志等生产化能力补齐
+- API / worker 拆分等部署形态增强
+
+这一部分应视为**方向性 backlog**，而不是固定不变的线性实施步骤。
 
 ---
 
-## 14. 前后端通信方式建议
+## 10. 相关设计与实施文档
 
-### 普通请求
-- REST API
+设计与实施文档位于 `docs/superpowers/`，当前重点包括：
 
-### 流式聊天
-- SSE
+### 核心设计
+- `docs/superpowers/specs/2026-03-26-ai-chat-design.md`
+- `docs/superpowers/specs/2026-03-27-schedule-mvp-design.md`
+- `docs/superpowers/specs/2026-03-27-ai-schedule-management-design.md`
+- `docs/superpowers/specs/2026-03-30-gap-analysis-next-backlog-design.md`
+- `docs/superpowers/specs/2026-03-30-web-ux-refresh-design.md`
 
-原因：
-- 实现简单
-- 与 LLM 流式响应适配度高
-- 前端接入成本低
-- 非常适合“服务端持续输出文本”的聊天场景
-
-如果未来需要：
-- 多人协作
-- Presence
-- 高频双向事件
-
-再升级到 WebSocket。
-
----
-
-## 15. UI 与样式层建议
-
-前端建议使用：
-
-- Tailwind CSS
-- shadcn/ui
-
-原因：
-- 主流
-- 开发速度快
-- 适合聊天页、配置页、管理页
-- 可控性高
-
-常用组件会包括：
-- Dialog
-- Drawer
-- Tabs
-- Select
-- Tooltip
-- Toast
-- Table
-- Badge
+### 实施计划 / 结果
+- `docs/superpowers/plans/2026-03-26-platform-bootstrap-auth.md`
+- `docs/superpowers/plans/2026-03-26-chat-mvp.md`
+- `docs/superpowers/plans/2026-03-26-tool-mvp.md`
+- `docs/superpowers/plans/2026-03-27-schedule-mvp.md`
+- `docs/superpowers/plans/2026-03-27-ai-schedule-management.md`
+- `docs/superpowers/plans/2026-03-30-gap-closure.md`
+- `docs/superpowers/plans/2026-03-30-gap-closure-report.md`
+- `docs/superpowers/plans/2026-03-30-chat-protocol-upgrade.md`
+- `docs/superpowers/plans/2026-03-30-web-ux-refresh-implementation.md`
 
 ---
 
-## 16. 鉴权建议
+## 11. 维护原则
 
-MVP 建议：
-- JWT access token
-- refresh token
-
-如果偏正式后台系统，建议：
-- access token 放内存
-- refresh token 使用 httpOnly cookie
-
-这样安全性更好。
-
----
-
-## 17. 部署建议
-
-### 开发环境
-使用 Docker Compose 启动：
-- PostgreSQL
-- Redis
-
-### 生产环境建议拆分
-- `web`：静态资源部署
-- `api`：NestJS 服务
-- `worker`：BullMQ worker 单独进程
-- PostgreSQL / Redis：独立服务
-
-说明：
-- API 负责处理请求
-- Worker 负责执行耗时 AI 任务
-
-这样更利于稳定性和扩展。
-
----
-
-## 18. 工程规范建议
-
-- Node >= 20
-- pnpm >= 9
-- pnpm workspace
-- Turborepo
-- ESLint
-- Prettier
-- Husky
-- lint-staged
-- Conventional Commits
-
----
-
-## 19. 推荐 MVP 范围
-
-### 后端
-- 登录
-- 创建会话
-- 发送消息
-- 流式回复
-- 3 个 Tool
-  - `get_current_time`
-  - `search_knowledge`
-  - `create_schedule_task`
-- 定时任务 CRUD
-- 任务执行日志
-
-### 前端
-- 登录页
-- 聊天页
-- 定时任务管理页
-- 执行记录页
-
----
-
-## 20. 推荐实施顺序
-
-### 第 1 步
-搭建 monorepo 基础：
-- pnpm workspace
-- turbo
-- apps/api
-- apps/web
-- packages/shared
-
-### 第 2 步
-完成后端基础设施：
-- NestJS
-- Prisma
-- PostgreSQL
-- Redis
-- BullMQ
-- 鉴权
-
-### 第 3 步
-完成聊天主链路：
-- 会话
-- 消息
-- SSE 流式输出
-- LLM 接入
-
-### 第 4 步
-完成 Tool 体系：
-- Tool 注册中心
-- 基础 Tool
-- Tool 调用审计
-
-### 第 5 步
-完成定时任务：
-- Schedule CRUD
-- BullMQ repeat/delay
-- Worker 执行 AI 任务
-
-### 第 6 步
-完成前端页面：
-- 登录
-- 聊天
-- 定时任务管理
-- 运行记录展示
-
-### 第 7 步
-补充工程化与观测：
-- 日志
-- 错误追踪
-- 限流
-- 超时控制
-- 权限控制
-
----
-
-## 21. 最终推荐结论
-
-当前项目建议采用：
-
-### 后端
-- NestJS
-- LangChainJS
-- Prisma
-- PostgreSQL
-- Redis
-- BullMQ
-- SSE
-
-### 前端
-- Vite
-- React
-- TypeScript
-- Tailwind CSS
-- Zustand
-- TanStack Query
-- React Router
-- shadcn/ui
-
-### 工程化
-- pnpm workspace
-- Turborepo
-- Node >= 20
-
-这是当前最适合该项目的平衡方案。
-
----
-
-## 22. 当前阶段说明
-
-当前目录仅创建项目文件夹，并写入本方案汇总文档，方便先审阅。
-
-下一步可选方向：
-
-1. 初始化 monorepo 骨架
-2. 输出数据库设计文档
-3. 输出 API 详细设计
-4. 直接开始搭建 apps/api 与 apps/web
+- 遵循 KISS，优先简单直接的实现
+- 以当前代码实现为准，不把未来目标写成现状
+- `PROJECT_PLAN.md` 负责全局总览，不承担详细 spec / plan 的职责
+- 详细设计与实施过程进入 `docs/superpowers/`
+- 当系统真实边界发生变化时，应同步更新本文件，避免其退化为历史立项文档
