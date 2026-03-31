@@ -3,6 +3,7 @@ import type {
   GetScheduleRunResponse,
   ListScheduleRunsResponse,
   ListSchedulesResponse,
+  RetryScheduleRunResponse,
   ScheduleSummary,
   UpdateScheduleRequest
 } from '@ai-chat/shared';
@@ -72,4 +73,11 @@ export function listRuns(accessToken: string, filters?: { scheduleId?: string; s
 
 export function getRun(accessToken: string, id: string) {
   return apiFetch<GetScheduleRunResponse>(`/runs/${id}`, { accessToken });
+}
+
+export function retryRun(accessToken: string, id: string) {
+  return apiFetch<RetryScheduleRunResponse>(`/runs/${id}/retry`, {
+    method: 'POST',
+    accessToken
+  });
 }

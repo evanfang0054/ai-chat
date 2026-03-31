@@ -34,6 +34,9 @@ export function AppShell({ children, sidebar }: PropsWithChildren<{ sidebar?: Re
               <NavLink className={navClassName} to="/runs">
                 Runs
               </NavLink>
+              <NavLink className={navClassName} to="/settings">
+                Settings
+              </NavLink>
             </nav>
           </div>
           <div className="flex items-center gap-3">

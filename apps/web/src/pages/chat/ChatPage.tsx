@@ -7,7 +7,7 @@ import { SessionSidebar } from '../../components/chat/SessionSidebar';
 import { MessageList } from '../../components/chat/MessageList';
 import { ChatComposer } from '../../components/chat/ChatComposer';
 import { AppShell } from '../../components/layout/AppShell';
-import { Card } from '../../components/ui';
+import { Button, Card } from '../../components/ui';
 import { useAuthStore } from '../../stores/auth-store';
 import { useChatStore } from '../../stores/chat-store';
 import {
@@ -24,8 +24,19 @@ export function ChatPage() {
   const requestedSessionId = searchParams.get('sessionId');
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState('');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const { sessions, currentSessionId, setSessions, setCurrentSession, upsertSession } = useChatStore();
+  const [lastSubmittedMessage, setLastSubmittedMessage] = useState<string | null>(null);
+  const {
+    sessions,
+    currentSessionId,
+    streamUiState,
+    streamErrorMessage,
+    setSessions,
+    setCurrentSession,
+    upsertSession,
+    setStreamFailed,
+    setStreamIdle,
+    setStreamStreaming
+  } = useChatStore();
 
   const headers = useMemo(
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
@@ -45,6 +56,8 @@ export function ChatPage() {
       }
     },
     onFinish: async () => {
+      setStreamIdle();
+
       if (!accessToken) {
         return;
       }
@@ -58,13 +71,24 @@ export function ChatPage() {
       }
     },
     onError: (error) => {
-      setErrorMessage(error.message || '发送失败，请稍后重试。');
+      setStreamFailed(error.message || '发送失败，请稍后重试。');
     }
   });
 
   useEffect(() => {
     setMessages(liveMessages);
   }, [liveMessages]);
+
+  useEffect(() => {
+    if (status === 'submitted' || status === 'streaming') {
+      setStreamStreaming();
+      return;
+    }
+
+    if (status === 'ready' && streamUiState === 'STREAMING') {
+      setStreamIdle();
+    }
+  }, [setStreamIdle, setStreamStreaming, status, streamUiState]);
 
   useEffect(() => {
     if (!accessToken) {
@@ -96,29 +120,46 @@ export function ChatPage() {
     });
   }, [accessToken, currentSessionId, setLiveMessages, upsertSession]);
 
-  async function handleSubmit() {
-    if (!accessToken || !input.trim() || status === 'submitted' || status === 'streaming') {
+  async function submitMessage(content: string) {
+    if (!accessToken || !content.trim() || status === 'submitted' || status === 'streaming') {
       return;
     }
 
-    setErrorMessage(null);
-
-    const content = input.trim();
-    setInput('');
+    const trimmedContent = content.trim();
+    setLastSubmittedMessage(trimmedContent);
+    setStreamIdle();
 
     await append(
       {
         role: 'user',
-        content,
-        parts: [{ type: 'text', text: content }]
+        content: trimmedContent,
+        parts: [{ type: 'text', text: trimmedContent }]
       },
       {
         body: createChatRequestBody({
-          content,
+          content: trimmedContent,
           sessionId: currentSessionId ?? undefined
         })
       }
     );
+  }
+
+  async function handleSubmit() {
+    const content = input.trim();
+    if (!content) {
+      return;
+    }
+
+    setInput('');
+    await submitMessage(content);
+  }
+
+  async function handleRetryLastMessage() {
+    if (!lastSubmittedMessage) {
+      return;
+    }
+
+    await submitMessage(lastSubmittedMessage);
   }
 
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -134,7 +175,8 @@ export function ChatPage() {
             setCurrentSession(null);
             setMessages([]);
             setLiveMessages([]);
-            setErrorMessage(null);
+            setLastSubmittedMessage(null);
+            setStreamIdle();
           }}
           onSelect={setCurrentSession}
         />
@@ -144,14 +186,20 @@ export function ChatPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-[rgb(var(--foreground))]">Chat</h1>
         <p className="mt-1 text-sm text-[rgb(var(--foreground-secondary))]">与 AI 助手对话</p>
       </Card>
-      {!hasMessages ? <EmptyChatState /> : <MessageList messages={messages} />}
-      {errorMessage ? (
+      {streamUiState === 'IDLE' && !hasMessages ? <EmptyChatState /> : null}
+      {hasMessages ? <MessageList messages={messages} /> : null}
+      {streamUiState === 'FAILED' && streamErrorMessage ? (
         <Card className="border-[rgb(var(--error)/0.3)] bg-[rgb(var(--error)/0.05)] p-4">
-          <div className="flex items-start gap-3">
-            <svg className="h-5 w-5 text-[rgb(var(--error))] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span className="text-sm text-[rgb(var(--error))]">{errorMessage}</span>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              <svg className="h-5 w-5 shrink-0 text-[rgb(var(--error))]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm text-[rgb(var(--error))]">{streamErrorMessage}</span>
+            </div>
+            <Button type="button" variant="secondary" onClick={handleRetryLastMessage}>
+              重试上一条消息
+            </Button>
           </div>
         </Card>
       ) : null}

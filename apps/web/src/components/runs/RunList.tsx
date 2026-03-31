@@ -3,6 +3,17 @@ import type { ScheduleRunSummary } from '@ai-chat/shared';
 
 import { Badge, Button, Card } from '../ui';
 
+const runStatusLabel: Record<string, string> = {
+  PENDING: 'Pending',
+  RUNNING: 'Running',
+  SUCCEEDED: 'Succeeded',
+  FAILED: 'Failed'
+};
+
+function formatRunStatus(status: string) {
+  return runStatusLabel[status] ?? status;
+}
+
 export function RunList(props: {
   runs: ScheduleRunSummary[];
   currentRunId: string | null;
@@ -21,7 +32,7 @@ export function RunList(props: {
                 <div className="flex items-center justify-between gap-3">
                   <strong className="text-base">{run.schedule.title}</strong>
                   <Badge variant={run.status === 'SUCCEEDED' ? 'success' : run.status === 'FAILED' ? 'error' : 'warning'}>
-                    {run.status}
+                    {formatRunStatus(run.status)}
                   </Badge>
                 </div>
                 <div className="text-sm text-slate-300">{run.taskPromptSnapshot}</div>

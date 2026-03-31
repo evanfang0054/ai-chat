@@ -7,7 +7,7 @@ import type {
 } from '@ai-chat/shared';
 import type { UIMessage } from 'ai';
 import { apiFetch } from '../lib/api';
-import { env } from '../lib/env';
+import { getApiBaseUrl } from '../lib/env';
 
 export function listChatSessions(accessToken: string) {
   return apiFetch<ListChatSessionsResponse>('/chat/sessions', { accessToken });
@@ -18,7 +18,7 @@ export function getChatMessages(accessToken: string, sessionId: string) {
 }
 
 export function getChatStreamUrl() {
-  return `${env.apiBaseUrl}/chat/stream`;
+  return `${getApiBaseUrl()}/chat/stream`;
 }
 
 export function createChatRequestBody(payload: SendChatMessageRequest) {

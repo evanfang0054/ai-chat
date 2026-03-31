@@ -14,6 +14,7 @@ describe('ProtectedRoute', () => {
   it('renders protected content when authenticated', () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token-123',
+      refreshToken: 'refresh-123',
       user: {
         id: 'user-1',
         email: 'user@example.com',

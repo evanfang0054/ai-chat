@@ -163,6 +163,34 @@ function scheduleTime(schedule: ScheduleSummary) {
   return schedule.type === 'CRON' ? schedule.cronExpr : schedule.runAt;
 }
 
+const runStatusLabel: Record<string, string> = {
+  PENDING: 'Pending',
+  RUNNING: 'Running',
+  SUCCEEDED: 'Succeeded',
+  FAILED: 'Failed'
+};
+
+function formatRunStatus(status: string | null | undefined) {
+  if (!status) {
+    return '—';
+  }
+
+  return runStatusLabel[status] ?? status;
+}
+
+function ScheduleHealthSummary(props: { schedule: ScheduleSummary }) {
+  const { schedule } = props;
+
+  return (
+    <div className="space-y-1 text-sm text-slate-400">
+      <div>Next Run: {schedule.nextRunAt ?? '—'}</div>
+      <div>Latest Status: {formatRunStatus(schedule.latestRunStatus)}</div>
+      <div>Latest Failure: {schedule.latestFailureMessage ?? '—'}</div>
+      <div>Latest Result: {schedule.latestResultSummary ?? '—'}</div>
+    </div>
+  );
+}
+
 export function ScheduleList(props: {
   schedules: ScheduleSummary[];
   onToggle: (schedule: ScheduleSummary) => Promise<void>;
@@ -188,7 +216,7 @@ export function ScheduleList(props: {
                 <div className="text-sm text-slate-200">{schedule.type}</div>
                 <div className="text-sm text-slate-300">{schedule.taskPrompt}</div>
                 <div className="text-sm text-slate-400">{scheduleTime(schedule)}</div>
-                <div className="text-sm text-slate-400">Next run: {schedule.nextRunAt ?? '—'}</div>
+                <ScheduleHealthSummary schedule={schedule} />
                 <div className="flex flex-wrap gap-2">
                   <Button variant="secondary" onClick={() => props.onEdit(schedule)}>
                     Edit

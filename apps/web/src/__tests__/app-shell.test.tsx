@@ -15,6 +15,7 @@ describe('AppShell', () => {
   it('renders theme toggle button', () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token',
+      refreshToken: 'refresh-token',
       user: { id: '1', email: 'test@example.com', role: 'USER', status: 'ACTIVE', createdAt: new Date().toISOString() }
     });
 

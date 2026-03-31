@@ -31,6 +31,7 @@ describe('SchedulesPage', () => {
   it('renders schedule page shell heading', async () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token-123',
+      refreshToken: 'refresh-123',
       user: {
         id: 'user-1',
         email: 'user@example.com',
@@ -54,6 +55,7 @@ describe('SchedulesPage', () => {
   it('keeps form controls accessible by label', async () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token-123',
+      refreshToken: 'refresh-123',
       user: {
         id: 'user-1',
         email: 'user@example.com',
@@ -75,9 +77,60 @@ describe('SchedulesPage', () => {
     expect(screen.getByLabelText(/task prompt/i)).toBeInTheDocument();
   });
 
+  it('shows schedule health summary with next run and latest failure', async () => {
+    useAuthStore.getState().setAuth({
+      accessToken: 'token-123',
+      refreshToken: 'refresh-123',
+      user: {
+        id: 'user-1',
+        email: 'user@example.com',
+        role: 'USER',
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString()
+      }
+    });
+
+    vi.spyOn(scheduleService, 'listSchedules').mockResolvedValue({
+      schedules: [
+        {
+          id: 'schedule-1',
+          title: 'Existing schedule',
+          taskPrompt: 'Existing prompt',
+          type: 'ONE_TIME',
+          cronExpr: null,
+          intervalMs: null,
+          runAt: '2026-03-28T09:00:00.000Z',
+          timezone: 'UTC',
+          enabled: true,
+          lastRunAt: '2026-03-28T09:00:05.000Z',
+          nextRunAt: '2026-03-29T09:00:00.000Z',
+          latestRunStatus: 'FAILED',
+          latestFailureMessage: 'Agent failed',
+          latestResultSummary: 'Partial summary',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ]
+    });
+
+    await router.navigate('/schedules');
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
+
+    expect(await screen.findByText(/Next Run:/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Status: Failed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Failure:/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Result:/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Agent failed/i)).toBeInTheDocument();
+  });
+
   it('loads schedules, creates a one-time schedule, edits an existing schedule, and deletes it', async () => {
     useAuthStore.getState().setAuth({
       accessToken: 'token-123',
+      refreshToken: 'refresh-123',
       user: {
         id: 'user-1',
         email: 'user@example.com',
@@ -101,6 +154,9 @@ describe('SchedulesPage', () => {
           enabled: true,
           lastRunAt: null,
           nextRunAt: '2026-03-28T09:00:00.000Z',
+          latestRunStatus: null,
+          latestFailureMessage: null,
+          latestResultSummary: null,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -119,6 +175,9 @@ describe('SchedulesPage', () => {
       enabled: true,
       lastRunAt: null,
       nextRunAt: '2026-03-29T09:00:00.000Z',
+      latestRunStatus: null,
+      latestFailureMessage: null,
+      latestResultSummary: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
@@ -135,6 +194,9 @@ describe('SchedulesPage', () => {
       enabled: true,
       lastRunAt: null,
       nextRunAt: '2026-03-30T09:30:00.000Z',
+      latestRunStatus: null,
+      latestFailureMessage: null,
+      latestResultSummary: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });

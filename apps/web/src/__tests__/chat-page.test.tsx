@@ -65,6 +65,7 @@ vi.mock('@ai-sdk/react', async () => {
 function signIn() {
   useAuthStore.getState().setAuth({
     accessToken: 'token-123',
+    refreshToken: 'refresh-123',
     user: {
       id: 'user-1',
       email: 'user@example.com',
@@ -305,11 +306,36 @@ describe('ChatPage', () => {
     expect(screen.getByText('开始一个新的对话')).toBeInTheDocument();
   });
 
-  it('shows stream error when append fails', async () => {
+  it('shows empty state before first message and recovery action after failed stream', async () => {
     signIn();
     useChatMock.appendError = new Error('发送失败');
 
     vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({ sessions: [] });
+
+    await router.navigate('/chat');
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
+
+    expect(await screen.findByText('开始一个新的对话')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole('textbox'), 'Hello AI');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('发送失败')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试上一条消息' })).toBeInTheDocument();
+  });
+
+  it('retries the last message and recovers after a failed stream', async () => {
+    signIn();
+    useChatMock.appendError = new Error('发送失败');
+
+    vi.spyOn(chatService, 'listChatSessions')
+      .mockResolvedValueOnce({ sessions: [] })
+      .mockResolvedValueOnce({ sessions: [createSession('session-1', 'Hello AI')] });
+    vi.spyOn(chatService, 'getChatMessages').mockResolvedValue(createTimeline('session-1', 'Hello AI', 'Recovered reply'));
 
     await router.navigate('/chat');
     render(
@@ -323,5 +349,25 @@ describe('ChatPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('发送失败')).toBeInTheDocument();
+
+    useChatMock.appendError = null;
+    useChatMock.nextMessages = createUiMessages('Hello AI', 'Recovered reply');
+    await userEvent.click(screen.getByRole('button', { name: '重试上一条消息' }));
+
+    expect(await screen.findByText('Recovered reply')).toBeInTheDocument();
+    expect(screen.queryByText('发送失败')).not.toBeInTheDocument();
+    expect(useChatMock.appendCalls).toHaveLength(2);
+    expect(useChatMock.appendCalls[1]).toMatchObject({
+      message: {
+        role: 'user',
+        content: 'Hello AI'
+      },
+      options: {
+        body: {
+          content: 'Hello AI'
+        }
+      }
+    });
   });
+
 });
