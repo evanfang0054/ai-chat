@@ -2,9 +2,11 @@ import type { ToolExecutionSummary } from '@ai-chat/shared';
 import { Badge, Card } from '../ui';
 
 const statusVariant: Record<ToolExecutionSummary['status'], 'success' | 'warning' | 'error'> = {
+  PENDING: 'warning',
   RUNNING: 'warning',
   SUCCEEDED: 'success',
-  FAILED: 'error'
+  FAILED: 'error',
+  CANCELLED: 'error'
 };
 
 export function ToolExecutionItem({ execution }: { execution: ToolExecutionSummary }) {

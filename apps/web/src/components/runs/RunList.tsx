@@ -6,8 +6,9 @@ import { Badge, Button, Card } from '../ui';
 const runStatusLabel: Record<string, string> = {
   PENDING: 'Pending',
   RUNNING: 'Running',
-  SUCCEEDED: 'Succeeded',
-  FAILED: 'Failed'
+  COMPLETED: 'Completed',
+  FAILED: 'Failed',
+  CANCELLED: 'Cancelled'
 };
 
 function formatRunStatus(status: string) {
@@ -31,7 +32,7 @@ export function RunList(props: {
               <Card className="space-y-2 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <strong className="text-base">{run.schedule.title}</strong>
-                  <Badge variant={run.status === 'SUCCEEDED' ? 'success' : run.status === 'FAILED' ? 'error' : 'warning'}>
+                  <Badge variant={run.status === 'COMPLETED' ? 'success' : run.status === 'FAILED' || run.status === 'CANCELLED' ? 'error' : 'warning'}>
                     {formatRunStatus(run.status)}
                   </Badge>
                 </div>
@@ -40,7 +41,7 @@ export function RunList(props: {
                   Started: {run.startedAt ?? '—'} · Finished: {run.finishedAt ?? '—'}
                 </div>
                 {run.resultSummary && <div className="text-sm text-slate-300">Result: {run.resultSummary}</div>}
-                {run.errorMessage && <div className="text-sm text-rose-300">Error: {run.errorMessage}</div>}
+                {run.failureMessage && <div className="text-sm text-rose-300">Error: {run.failureMessage}</div>}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="secondary"

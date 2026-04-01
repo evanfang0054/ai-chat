@@ -7,11 +7,15 @@ import { RunList } from '../../components/runs/RunList';
 import { useAuthStore } from '../../stores/auth-store';
 import { getRun, listRuns, retryRun } from '../../services/schedule';
 
+const ACTIVE_RUN_STATUSES = new Set<ScheduleRunSummary['status']>(['PENDING', 'RUNNING']);
+const ACTIVE_RUN_REFRESH_MS = 3000;
+
 const runStatusLabel: Record<string, string> = {
   PENDING: 'Pending',
   RUNNING: 'Running',
-  SUCCEEDED: 'Succeeded',
-  FAILED: 'Failed'
+  COMPLETED: 'Completed',
+  FAILED: 'Failed',
+  CANCELLED: 'Cancelled'
 };
 
 function formatRunStatus(status: string) {
@@ -28,11 +32,15 @@ function RunDiagnosticsCard(props: {
   return (
     <div className="space-y-2 text-sm">
       <div>Run ID: {run.id}</div>
+      <div>Request ID: {run.requestId ?? '—'}</div>
+      <div>Session ID: {run.sessionId ?? '—'}</div>
+      <div>Message ID: {run.messageId ?? '—'}</div>
       <div>Schedule ID: {run.scheduleId}</div>
       <div>Chat Session ID: {run.chatSessionId ?? '—'}</div>
       <div>Status: {formatRunStatus(run.status)}</div>
       <div>Stage: {run.stage}</div>
-      <div>Error Category: {run.errorCategory ?? '—'}</div>
+      <div>Failure Category: {run.failureCategory ?? '—'}</div>
+      <div>Failure Code: {run.failureCode ?? '—'}</div>
       <div>Tool Calls: {run.toolExecutionCount}</div>
       {run.toolExecutions?.length ? (
         <div>
@@ -51,7 +59,7 @@ function RunDiagnosticsCard(props: {
       <div>Started: {run.startedAt ?? '—'}</div>
       <div>Finished: {run.finishedAt ?? '—'}</div>
       <div>Result: {run.resultSummary ?? '—'}</div>
-      <div className={run.errorMessage ? 'text-rose-300' : 'text-slate-100'}>Error: {run.errorMessage ?? '—'}</div>
+      <div className={run.failureMessage ? 'text-rose-300' : 'text-slate-100'}>Error: {run.failureMessage ?? '—'}</div>
     </div>
   );
 }
@@ -95,6 +103,25 @@ export function RunsPage() {
     }
   }, [accessToken]);
 
+  const refreshRuns = useCallback(async (preferredRunId?: string | null) => {
+    if (!accessToken) {
+      return null;
+    }
+
+    const { runs: nextRuns } = await listRuns(accessToken, {
+      status: statusFilter || undefined,
+      scheduleId: scheduleIdFilter.trim() || undefined
+    });
+
+    setRuns(nextRuns);
+    const nextCurrentRunId = syncSelection(nextRuns, preferredRunId ?? currentRunIdRef.current);
+    if (nextCurrentRunId) {
+      await loadRunDetails(nextCurrentRunId);
+    }
+
+    return nextCurrentRunId;
+  }, [accessToken, loadRunDetails, scheduleIdFilter, statusFilter, syncSelection]);
+
   const selectRun = useCallback((runId: string) => {
     currentRunIdRef.current = runId;
     setCurrentRunId(runId);
@@ -103,25 +130,20 @@ export function RunsPage() {
   }, [loadRunDetails, runs]);
 
   useEffect(() => {
-    if (!accessToken) {
+    void refreshRuns();
+  }, [refreshRuns]);
+
+  useEffect(() => {
+    if (!selectedRun || !ACTIVE_RUN_STATUSES.has(selectedRun.status)) {
       return;
     }
 
-    void listRuns(accessToken, {
-      status: statusFilter || undefined,
-      scheduleId: scheduleIdFilter.trim() || undefined
-    }).then(({ runs: nextRuns }) => {
-      setRuns((currentRuns) => {
-        const preservedRuns = currentRuns.filter((run) => !nextRuns.some((nextRun) => nextRun.id === run.id));
-        const mergedRuns = [...preservedRuns, ...nextRuns];
-        const nextCurrentRunId = syncSelection(mergedRuns, currentRunIdRef.current);
-        if (nextCurrentRunId) {
-          void loadRunDetails(nextCurrentRunId);
-        }
-        return mergedRuns;
-      });
-    });
-  }, [accessToken, loadRunDetails, scheduleIdFilter, statusFilter, syncSelection]);
+    const timer = window.setTimeout(() => {
+      void refreshRuns(selectedRun.id);
+    }, ACTIVE_RUN_REFRESH_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [refreshRuns, selectedRun]);
 
   const handleRetry = async () => {
     if (!accessToken || !selectedRun || isRetrying) {
@@ -164,8 +186,9 @@ export function RunsPage() {
                 <option value="">All</option>
                 <option value="PENDING">Pending</option>
                 <option value="RUNNING">Running</option>
-                <option value="SUCCEEDED">Succeeded</option>
+                <option value="COMPLETED">Completed</option>
                 <option value="FAILED">Failed</option>
+                <option value="CANCELLED">Cancelled</option>
               </select>
             </label>
           </div>

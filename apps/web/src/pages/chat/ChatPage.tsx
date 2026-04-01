@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
-import type { UIMessage } from 'ai';
 import { useSearchParams } from 'react-router-dom';
 import { EmptyChatState } from '../../components/chat/EmptyChatState';
 import { SessionSidebar } from '../../components/chat/SessionSidebar';
@@ -10,40 +9,38 @@ import { AppShell } from '../../components/layout/AppShell';
 import { Button, Card } from '../../components/ui';
 import { useAuthStore } from '../../stores/auth-store';
 import { useChatStore } from '../../stores/chat-store';
-import {
-  createChatRequestBody,
-  createUiMessagesFromTimeline,
-  getChatMessages,
-  getChatStreamUrl,
-  listChatSessions
-} from '../../services/chat';
+import { getChatStreamUrl } from '../../services/chat';
 
 export function ChatPage() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get('sessionId');
-  const [messages, setMessages] = useState<UIMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [lastSubmittedMessage, setLastSubmittedMessage] = useState<string | null>(null);
-  const {
-    sessions,
-    currentSessionId,
-    streamUiState,
-    streamErrorMessage,
-    setSessions,
-    setCurrentSession,
-    upsertSession,
-    setStreamFailed,
-    setStreamIdle,
-    setStreamStreaming
-  } = useChatStore();
+  const sessions = useChatStore((state) => state.sessions);
+  const currentSessionId = useChatStore((state) => state.currentSessionId);
+  const messages = useChatStore((state) => state.messages);
+  const draftInput = useChatStore((state) => state.draftInput);
+  const lastSubmittedMessage = useChatStore((state) => state.lastSubmittedMessage);
+  const streamUiState = useChatStore((state) => state.streamUiState);
+  const streamErrorMessage = useChatStore((state) => state.streamErrorMessage);
+  const bindRuntime = useChatStore((state) => state.bindRuntime);
+  const clearRuntime = useChatStore((state) => state.clearRuntime);
+  const syncRuntime = useChatStore((state) => state.syncRuntime);
+  const setDraftInput = useChatStore((state) => state.setDraftInput);
+  const initializeChatPage = useChatStore((state) => state.initializeChatPage);
+  const syncCurrentSessionMessages = useChatStore((state) => state.syncCurrentSessionMessages);
+  const submitMessage = useChatStore((state) => state.submitMessage);
+  const retryLastMessage = useChatStore((state) => state.retryLastMessage);
+  const handleStreamFinish = useChatStore((state) => state.handleStreamFinish);
+  const handleStreamError = useChatStore((state) => state.handleStreamError);
+  const startNewChatWithReset = useChatStore((state) => state.startNewChatWithReset);
+  const setCurrentSession = useChatStore((state) => state.setCurrentSession);
 
   const headers = useMemo(
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
     [accessToken]
   );
 
-  const { append, messages: liveMessages, setMessages: setLiveMessages, status } = useChat({
+  const { append, messages: liveMessages, setMessages: replaceMessages, status } = useChat({
     api: getChatStreamUrl(),
     headers,
     streamProtocol: 'data',
@@ -56,102 +53,45 @@ export function ChatPage() {
       }
     },
     onFinish: async () => {
-      setStreamIdle();
-
-      if (!accessToken) {
-        return;
-      }
-
-      const { sessions: nextSessions } = await listChatSessions(accessToken);
-      setSessions(nextSessions);
-      const nextCurrentSession = nextSessions.find((session) => session.id === currentSessionId) ?? nextSessions[0] ?? null;
-      if (nextCurrentSession) {
-        setCurrentSession(nextCurrentSession.id);
-        upsertSession(nextCurrentSession);
-      }
+      await handleStreamFinish(accessToken);
     },
     onError: (error) => {
-      setStreamFailed(error.message || '发送失败，请稍后重试。');
+      handleStreamError(error);
     }
   });
 
-  useEffect(() => {
-    setMessages(liveMessages);
-  }, [liveMessages]);
+  const runtimeRef = useRef({ append, replaceMessages });
 
   useEffect(() => {
-    if (status === 'submitted' || status === 'streaming') {
-      setStreamStreaming();
-      return;
-    }
-
-    if (status === 'ready' && streamUiState === 'STREAMING') {
-      setStreamIdle();
-    }
-  }, [setStreamIdle, setStreamStreaming, status, streamUiState]);
+    runtimeRef.current = { append, replaceMessages };
+    bindRuntime(runtimeRef.current);
+  }, [append, bindRuntime, replaceMessages]);
 
   useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-
-    listChatSessions(accessToken).then(({ sessions }) => {
-      setSessions(sessions);
-      const requestedSession = requestedSessionId
-        ? sessions.find((session) => session.id === requestedSessionId) ?? null
-        : null;
-      const nextSession = requestedSession ?? sessions[0] ?? null;
-      setCurrentSession(nextSession?.id ?? null);
-    });
-  }, [accessToken, requestedSessionId, setCurrentSession, setSessions]);
+    return () => {
+      clearRuntime();
+    };
+  }, [clearRuntime]);
 
   useEffect(() => {
-    if (!accessToken || !currentSessionId) {
-      setMessages([]);
-      setLiveMessages([]);
-      return;
-    }
+    syncRuntime({ status, messages: liveMessages });
+  }, [liveMessages, status, syncRuntime]);
 
-    getChatMessages(accessToken, currentSessionId).then((timeline) => {
-      const nextMessages = createUiMessagesFromTimeline(timeline);
-      setMessages(nextMessages);
-      setLiveMessages(nextMessages);
-      upsertSession(timeline.session);
-    });
-  }, [accessToken, currentSessionId, setLiveMessages, upsertSession]);
+  useEffect(() => {
+    void initializeChatPage(accessToken, requestedSessionId);
+  }, [accessToken, initializeChatPage, requestedSessionId]);
 
-  async function submitMessage(content: string) {
-    if (!accessToken || !content.trim() || status === 'submitted' || status === 'streaming') {
-      return;
-    }
-
-    const trimmedContent = content.trim();
-    setLastSubmittedMessage(trimmedContent);
-    setStreamIdle();
-
-    await append(
-      {
-        role: 'user',
-        content: trimmedContent,
-        parts: [{ type: 'text', text: trimmedContent }]
-      },
-      {
-        body: createChatRequestBody({
-          content: trimmedContent,
-          sessionId: currentSessionId ?? undefined
-        })
-      }
-    );
-  }
+  useEffect(() => {
+    void syncCurrentSessionMessages(accessToken);
+  }, [accessToken, currentSessionId, syncCurrentSessionMessages]);
 
   async function handleSubmit() {
-    const content = input.trim();
+    const content = draftInput.trim();
     if (!content) {
       return;
     }
 
-    setInput('');
-    await submitMessage(content);
+    await submitMessage(content, accessToken);
   }
 
   async function handleRetryLastMessage() {
@@ -159,7 +99,7 @@ export function ChatPage() {
       return;
     }
 
-    await submitMessage(lastSubmittedMessage);
+    await retryLastMessage(accessToken);
   }
 
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -171,13 +111,7 @@ export function ChatPage() {
         <SessionSidebar
           sessions={sessions}
           currentSessionId={currentSessionId}
-          onNewChat={() => {
-            setCurrentSession(null);
-            setMessages([]);
-            setLiveMessages([]);
-            setLastSubmittedMessage(null);
-            setStreamIdle();
-          }}
+          onNewChat={startNewChatWithReset}
           onSelect={setCurrentSession}
         />
       }
@@ -203,7 +137,7 @@ export function ChatPage() {
           </div>
         </Card>
       ) : null}
-      <ChatComposer value={input} disabled={isStreaming || !accessToken} onChange={setInput} onSubmit={handleSubmit} />
+      <ChatComposer value={draftInput} disabled={isStreaming || !accessToken} onChange={setDraftInput} onSubmit={handleSubmit} />
     </AppShell>
   );
 }

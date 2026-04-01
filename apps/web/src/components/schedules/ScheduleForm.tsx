@@ -2,6 +2,32 @@ import type { CreateScheduleRequest, ScheduleSummary, UpdateScheduleRequest } fr
 
 import { Badge, Button, Card, Input, Textarea } from '../ui';
 
+function toDatetimeLocalValue(iso: string) {
+  const date = new Date(iso);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function toIsoFromDatetimeLocal(value: string) {
+  const [datePart, timePart] = value.split('T');
+  if (!datePart || !timePart) {
+    return null;
+  }
+
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hours, minutes] = timePart.split(':').map(Number);
+  if ([year, month, day, hours, minutes].some((part) => Number.isNaN(part))) {
+    return null;
+  }
+
+  return new Date(year, month - 1, day, hours, minutes).toISOString();
+}
+
 export function ScheduleForm(props: {
   initial?: ScheduleSummary;
   onSubmit: (payload: CreateScheduleRequest | UpdateScheduleRequest) => Promise<void>;
@@ -17,40 +43,6 @@ export function ScheduleForm(props: {
     const timezone = String(formData.get('timezone') || 'UTC').trim() || 'UTC';
 
     if (!title || !taskPrompt) {
-      return;
-    }
-
-    if (props.initial) {
-      if (type === 'CRON') {
-        const cronExpr = String(formData.get('cronExpr') || '').trim();
-        if (!cronExpr) {
-          return;
-        }
-
-        await props.onSubmit({
-          title,
-          taskPrompt,
-          type,
-          cronExpr,
-          timezone
-        });
-        form.reset();
-        return;
-      }
-
-      const runAtLocal = String(formData.get('runAt') || '').trim();
-      if (!runAtLocal) {
-        return;
-      }
-
-      await props.onSubmit({
-        title,
-        taskPrompt,
-        type,
-        runAt: new Date(runAtLocal).toISOString(),
-        timezone
-      });
-      form.reset();
       return;
     }
 
@@ -72,7 +64,8 @@ export function ScheduleForm(props: {
     }
 
     const runAtLocal = String(formData.get('runAt') || '').trim();
-    if (!runAtLocal) {
+    const runAt = toIsoFromDatetimeLocal(runAtLocal);
+    if (!runAt) {
       return;
     }
 
@@ -80,7 +73,7 @@ export function ScheduleForm(props: {
       title,
       taskPrompt,
       type,
-      runAt: new Date(runAtLocal).toISOString(),
+      runAt,
       timezone
     });
     form.reset();
@@ -124,7 +117,7 @@ export function ScheduleForm(props: {
               name="runAt"
               type="datetime-local"
               defaultValue={
-                props.initial && props.initial.type === 'ONE_TIME' ? props.initial.runAt.slice(0, 16) : undefined
+                props.initial && props.initial.type === 'ONE_TIME' ? toDatetimeLocalValue(props.initial.runAt) : undefined
               }
             />
           </label>
@@ -166,8 +159,9 @@ function scheduleTime(schedule: ScheduleSummary) {
 const runStatusLabel: Record<string, string> = {
   PENDING: 'Pending',
   RUNNING: 'Running',
-  SUCCEEDED: 'Succeeded',
-  FAILED: 'Failed'
+  COMPLETED: 'Completed',
+  FAILED: 'Failed',
+  CANCELLED: 'Cancelled'
 };
 
 function formatRunStatus(status: string | null | undefined) {
@@ -178,13 +172,33 @@ function formatRunStatus(status: string | null | undefined) {
   return runStatusLabel[status] ?? status;
 }
 
+function formatRunStage(stage: string | null | undefined) {
+  if (!stage) {
+    return '—';
+  }
+
+  return stage
+    .toLowerCase()
+    .split('_')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
 function ScheduleHealthSummary(props: { schedule: ScheduleSummary }) {
   const { schedule } = props;
 
   return (
     <div className="space-y-1 text-sm text-slate-400">
       <div>Next Run: {schedule.nextRunAt ?? '—'}</div>
+      <div>Latest Run: {schedule.latestRunId ?? '—'}</div>
       <div>Latest Status: {formatRunStatus(schedule.latestRunStatus)}</div>
+      <div>Latest Stage: {formatRunStage(schedule.latestRunStage)}</div>
+      <div>Latest Request: {schedule.latestRequestId ?? '—'}</div>
+      <div>Latest Session: {schedule.latestSessionId ?? '—'}</div>
+      <div>Latest Message: {schedule.latestMessageId ?? '—'}</div>
+      <div>Latest Tools: {schedule.latestToolExecutionCount}</div>
+      <div>Latest Started: {schedule.latestRunStartedAt ?? '—'}</div>
+      <div>Latest Finished: {schedule.latestRunFinishedAt ?? '—'}</div>
       <div>Latest Failure: {schedule.latestFailureMessage ?? '—'}</div>
       <div>Latest Result: {schedule.latestResultSummary ?? '—'}</div>
     </div>
