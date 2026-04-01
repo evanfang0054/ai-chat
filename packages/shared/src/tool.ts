@@ -1,18 +1,24 @@
-import type { ErrorCategory } from './schedule';
+import type { FailureCategory } from './schedule';
 
 export type ToolName = 'get_current_time' | 'manage_schedule';
 
-export type ToolExecutionStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+export type ToolExecutionStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
 
 export interface ToolExecutionSummary {
   id: string;
   sessionId: string;
+  runId: string | null;
+  messageId: string | null;
   toolName: ToolName;
   status: ToolExecutionStatus;
+  progressMessage: string | null;
   input: string | null;
   output: string | null;
-  errorCategory: ErrorCategory | null;
+  partialOutput: string | null;
+  errorCategory: FailureCategory | null;
   errorMessage: string | null;
+  canRetry: boolean;
+  canCancel: boolean;
   startedAt: string | null;
   finishedAt: string | null;
 }
@@ -45,7 +51,7 @@ export type ToolExecutionFailedSummary = Omit<
   'status' | 'errorCategory' | 'errorMessage' | 'startedAt' | 'finishedAt'
 > & {
   status: 'FAILED';
-  errorCategory: ErrorCategory;
+  errorCategory: FailureCategory;
   errorMessage: string;
   startedAt: string;
   finishedAt: string;
