@@ -24,9 +24,11 @@ enum ChatMessageRole {
 }
 
 enum ToolExecutionStatus {
+  PENDING
   RUNNING
   SUCCEEDED
   FAILED
+  CANCELLED
 }
 
 enum ScheduleType {
@@ -38,28 +40,36 @@ enum ScheduleType {
 enum ScheduleRunStatus {
   PENDING
   RUNNING
-  SUCCEEDED
+  COMPLETED
   FAILED
+  CANCELLED
 }
 
 enum ErrorCategory {
-  USER_ERROR
-  EXTERNAL_ERROR
-  INTERNAL_ERROR
+  INPUT_ERROR
+  TOOL_ERROR
+  MODEL_ERROR
+  DEPENDENCY_ERROR
+  TIMEOUT_ERROR
+  SYSTEM_ERROR
+  CANCELLED
 }
 
 enum RunStage {
-  QUEUED
-  AGENT
-  LLM
-  TOOL
-  PERSISTENCE
-  COMPLETED
+  PREPARING
+  ROUTING
+  MODEL_CALLING
+  TOOL_RUNNING
+  REPAIRING
+  PERSISTING
+  FINALIZING
 }
 
 enum RunTriggerSource {
+  USER
   SCHEDULE
   MANUAL_RETRY
+  DIAGNOSTICS_REPLAY
 }
 
 model User {
@@ -106,27 +116,37 @@ model ChatSession {
 model ChatMessage {
   id        String          @id @default(cuid())
   sessionId String
+  runId     String?
   role      ChatMessageRole
   content   String
   createdAt DateTime        @default(now())
   session   ChatSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
+  @@index([runId, createdAt])
 }
 
 model ToolExecution {
-  id           String              @id @default(cuid())
-  sessionId    String
-  toolName     String
-  status       ToolExecutionStatus
-  input        Json
-  output       Json?
-  errorMessage String?
-  startedAt    DateTime            @default(now())
-  finishedAt   DateTime?
-  session      ChatSession         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id              String              @id @default(cuid())
+  sessionId       String
+  runId           String?
+  messageId       String?
+  requestId       String?
+  toolName        String
+  status          ToolExecutionStatus
+  input           Json
+  output          Json?
+  progressMessage String?
+  partialOutput   String?
+  errorMessage    String?
+  startedAt       DateTime            @default(now())
+  finishedAt      DateTime?
+  session         ChatSession         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, startedAt])
+  @@index([runId, startedAt])
+  @@index([messageId, startedAt])
+  @@index([requestId, startedAt])
 }
 
 model Schedule {
@@ -155,8 +175,9 @@ model ScheduleRun {
   id                 String            @id @default(cuid())
   scheduleId         String
   userId             String
+  requestId          String?
   status             ScheduleRunStatus @default(PENDING)
-  stage              RunStage          @default(QUEUED)
+  stage              RunStage          @default(PREPARING)
   errorCategory      ErrorCategory?
   triggerSource      RunTriggerSource  @default(SCHEDULE)
   taskPromptSnapshot String
@@ -173,4 +194,5 @@ model ScheduleRun {
   @@index([userId, createdAt])
   @@index([scheduleId, createdAt])
   @@index([status, createdAt])
+  @@index([requestId, createdAt])
 }

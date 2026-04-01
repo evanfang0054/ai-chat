@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { formatDataStreamPart, pipeDataStreamToResponse } from 'ai';
+import type { ChatRunEvent, RunSummary } from '@ai-chat/shared';
 import type { JSONValue } from 'ai';
-import { BadRequestException, Body, Controller, Get, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -12,8 +14,6 @@ import type { CurrentUser as CurrentUserPayload } from './chat.types';
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
 export class ChatController {
-  private readonly logger = new Logger(ChatController.name);
-
   constructor(
     private readonly chatService: ChatService,
     private readonly agentService: AgentService
@@ -42,6 +42,45 @@ export class ChatController {
     return JSON.parse(JSON.stringify(value)) as JSONValue;
   }
 
+  private toRunEventData(event: ChatRunEvent) {
+    return this.toJsonValue(event);
+  }
+
+  private writeRunEvent(
+    writer: Parameters<Parameters<typeof pipeDataStreamToResponse>[1]['execute']>[0],
+    event: ChatRunEvent,
+    sessionId: string
+  ) {
+    writer.writeData(this.toRunEventData(event));
+
+    if (event.type === 'text_delta') {
+      writer.write(formatDataStreamPart('text', event.textDelta));
+      return;
+    }
+
+    if (event.type === 'tool_started' || event.type === 'tool_progressed') {
+      const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, sessionId);
+      writer.write(
+        formatDataStreamPart('tool_call', {
+          toolCallId: toolExecution.id,
+          toolName: toolExecution.toolName,
+          args: this.parseJsonString(toolExecution.input)
+        })
+      );
+      return;
+    }
+
+    if (event.type === 'tool_completed') {
+      const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, sessionId);
+      writer.write(
+        formatDataStreamPart('tool_result', {
+          toolCallId: toolExecution.id,
+          result: this.parseJsonString(toolExecution.output)
+        })
+      );
+    }
+  }
+
   @Get('sessions')
   listSessions(@CurrentUser() user: CurrentUserPayload) {
     return this.chatService.listSessions(user.userId);
@@ -63,14 +102,16 @@ export class ChatController {
       throw new BadRequestException('Message content is required');
     }
 
+    const runId = randomUUID();
+    const assistantMessageId = `assistant-${runId}`;
     let session;
     let userMessage;
 
     if (dto.sessionId) {
       session = await this.chatService.getSessionOrThrow(user.userId, dto.sessionId);
-      userMessage = await this.chatService.addUserMessage(session.id, content);
+      userMessage = await this.chatService.addUserMessage(session.id, content, runId);
     } else {
-      ({ session, userMessage } = await this.chatService.createSessionWithFirstMessage(user.userId, content));
+      ({ session, userMessage } = await this.chatService.createSessionWithFirstMessage(user.userId, content, runId));
     }
 
     const historyResult = await this.chatService.listMessages(user.userId, session.id);
@@ -78,138 +119,94 @@ export class ChatController {
       role: message.role,
       content: message.content
     }));
-    const assistantMessageId = `assistant-${session.id}`;
     const sessionSummary = this.chatService.formatSessionSummary(session);
     const userMessageSummary = this.chatService.formatMessage(userMessage);
 
     pipeDataStreamToResponse(res, {
       status: 201,
       execute: async (writer) => {
-        let assistantText = '';
+        const initialRun: RunSummary = {
+          id: runId,
+          sessionId: session.id,
+          messageId: userMessageSummary.id,
+          scheduleId: null,
+          status: 'RUNNING',
+          stage: 'PREPARING',
+          triggerSource: 'USER',
+          failureCategory: null,
+          failureCode: null,
+          failureMessage: null,
+          startedAt: null,
+          finishedAt: null
+        };
 
-        writer.writeData(
-          this.toJsonValue({
-            type: 'session-start',
-            sessionId: sessionSummary.id,
-            userMessageId: userMessageSummary.id,
+        writer.write(formatDataStreamPart('start_step', { messageId: assistantMessageId }));
+        this.writeRunEvent(
+          writer,
+          {
+            type: 'run_started',
+            run: initialRun,
             session: sessionSummary,
             message: userMessageSummary
-          })
+          },
+          session.id
         );
-        writer.write(formatDataStreamPart('start_step', { messageId: assistantMessageId }));
 
-        for await (const event of this.agentService.streamChatReply({
-          userId: user.userId,
-          sessionId: session.id,
-          history,
-          prompt: content
-        })) {
-          if (event.type === 'text-delta') {
-            assistantText += event.textDelta;
-            writer.write(formatDataStreamPart('text', event.textDelta));
-            continue;
-          }
+        try {
+          const result = await this.agentService.execute(
+            {
+              userId: user.userId,
+              sessionId: session.id,
+              messageId: assistantMessageId,
+              runId,
+              triggerSource: 'USER',
+              history,
+              prompt: content
+            },
+            (event) => {
+              this.writeRunEvent(writer, event, session.id);
+            }
+          );
 
-          if (event.type === 'tool-input-start') {
-            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
-            writer.writeData(
-              this.toJsonValue({
-                type: 'tool-input-start',
-                toolCallId: toolExecution.id,
-                toolName: toolExecution.toolName,
-                toolExecution
-              })
-            );
-            continue;
-          }
-
-          if (event.type === 'tool-input-available') {
-            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
-            writer.write(
-              formatDataStreamPart('tool_call', {
-                toolCallId: toolExecution.id,
-                toolName: toolExecution.toolName,
-                args: this.parseJsonString(toolExecution.input)
-              })
-            );
-            writer.writeData(
-              this.toJsonValue({
-                type: 'tool-input-available',
-                toolCallId: toolExecution.id,
-                toolName: toolExecution.toolName,
-                input: toolExecution.input,
-                toolExecution
-              })
-            );
-            continue;
-          }
-
-          if (event.type === 'tool-output-available') {
-            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
-            writer.write(
-              formatDataStreamPart('tool_result', {
-                toolCallId: toolExecution.id,
-                result: this.parseJsonString(toolExecution.output)
-              })
-            );
-            writer.writeData(
-              this.toJsonValue({
-                type: 'tool-output-available',
-                toolCallId: toolExecution.id,
-                toolName: toolExecution.toolName,
-                output: toolExecution.output,
-                toolExecution
-              })
-            );
-            continue;
-          }
-
-          if (event.type === 'tool-output-error') {
-            const toolExecution = this.normalizeToolExecutionSessionId(event.toolExecution, session.id);
-            writer.writeData(
-              this.toJsonValue({
-                type: 'tool-output-error',
-                toolCallId: toolExecution.id,
-                toolName: toolExecution.toolName,
-                errorText: toolExecution.errorMessage,
-                toolExecution
-              })
-            );
-            continue;
-          }
-
-          if (event.type === 'agent-error') {
-            writer.writeData(
-              this.toJsonValue({
-                type: 'agent-error',
-                error: event.error
-              })
-            );
-            continue;
-          }
+          const finalized = await this.chatService.finalizeAssistantReply(session.id, result.text, runId);
+          this.writeRunEvent(
+            writer,
+            {
+              type: 'run_completed',
+              run: result.run,
+              message: finalized.message
+            },
+            session.id
+          );
+          writer.write(
+            formatDataStreamPart('finish_step', {
+              isContinued: false,
+              finishReason: 'stop'
+            })
+          );
+          writer.write(
+            formatDataStreamPart('finish_message', {
+              finishReason: 'stop'
+            })
+          );
+        } catch (error) {
+          const failedRun: RunSummary = {
+            ...initialRun,
+            status: 'FAILED',
+            stage: 'FINALIZING',
+            failureCategory: 'SYSTEM_ERROR',
+            failureMessage: error instanceof Error ? error.message : 'Chat stream failed'
+          };
+          this.writeRunEvent(
+            writer,
+            {
+              type: 'run_failed',
+              run: failedRun
+            },
+            session.id
+          );
+          throw error;
         }
-
-        const finalized = await this.chatService.finalizeAssistantReply(session.id, assistantText);
-        writer.write(
-          formatDataStreamPart('finish_step', {
-            isContinued: false,
-            finishReason: 'stop'
-          })
-        );
-        writer.write(
-          formatDataStreamPart('finish_message', {
-            finishReason: 'stop'
-          })
-        );
-        writer.writeData(
-          this.toJsonValue({
-            type: 'session-finish',
-            sessionId: finalized.session.id,
-            assistantMessageId: finalized.message.id,
-            session: finalized.session,
-            message: finalized.message
-          })
-        );
       },
       onError: (error: unknown) => (error instanceof Error ? error.message : 'Chat stream failed')
     });

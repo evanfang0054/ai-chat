@@ -52,6 +52,8 @@ export class ToolService {
       sessionId: context.sessionId,
       scheduleId: context.scheduleId ?? null,
       runId: context.runId ?? null,
+      messageId: context.messageId ?? null,
+      requestId: context.requestId ?? null,
       ...extra
     };
   }
@@ -73,12 +75,25 @@ export class ToolService {
       typeof error === 'object' &&
       error !== null &&
       'category' in error &&
-      (error.category === 'USER_ERROR' || error.category === 'EXTERNAL_ERROR' || error.category === 'INTERNAL_ERROR')
+      typeof error.category === 'string' &&
+      [
+        'INPUT_ERROR',
+        'TOOL_ERROR',
+        'MODEL_ERROR',
+        'DEPENDENCY_ERROR',
+        'TIMEOUT_ERROR',
+        'SYSTEM_ERROR',
+        'CANCELLED'
+      ].includes(error.category)
     ) {
-      return error.category;
+      return error.category as ToolFailureCategory;
     }
 
-    return 'INTERNAL_ERROR';
+    if (error instanceof Error && /timeout$/i.test(error.message)) {
+      return 'TIMEOUT_ERROR';
+    }
+
+    return 'TOOL_ERROR';
   }
 
   async startToolExecution(name: string, input: ToolInput, context: ToolExecutionContext) {
@@ -88,19 +103,44 @@ export class ToolService {
       throw new Error(`Unknown tool: ${name}`);
     }
 
+    const startedAt = new Date();
+    const pendingExecution = {
+      id: `pending-${startedAt.getTime()}`,
+      sessionId: context.sessionId,
+      runId: context.runId ?? null,
+      messageId: context.messageId ?? null,
+      toolName: tool.name,
+      status: 'PENDING' as const,
+      input,
+      output: null,
+      progressMessage: 'Tool queued',
+      partialOutput: null,
+      errorMessage: null,
+      startedAt,
+      finishedAt: null
+    };
+
     const execution = await this.prisma.toolExecution.create({
       data: {
         sessionId: context.sessionId,
+        runId: context.runId ?? null,
+        messageId: context.messageId ?? null,
+        requestId: context.requestId ?? null,
         toolName: tool.name,
         status: ToolExecutionStatus.RUNNING,
-        input: this.toJsonValue(input)
+        input: this.toJsonValue(input),
+        progressMessage: 'Tool running',
+        partialOutput: null
       }
     });
+
+    const runningExecution = execution;
 
     this.logger.log('tool_execution_started', this.buildLogContext(context, { toolName: name, toolExecutionId: execution.id }));
 
     return {
-      execution,
+      execution: runningExecution,
+      pendingExecution,
       run: async () => {
         try {
           const output = await this.withTimeout(
@@ -115,12 +155,17 @@ export class ToolService {
             data: {
               status: ToolExecutionStatus.SUCCEEDED,
               output: outputText,
+              progressMessage: 'Tool completed',
+              partialOutput: null,
               finishedAt
             }
           });
 
           this.logger.log('tool_execution_succeeded', this.buildLogContext(context, { toolName: name, toolExecutionId: updatedExecution.id }));
-          return { execution: updatedExecution, outputText };
+          return {
+            execution: updatedExecution,
+            outputText
+          };
         } catch (error) {
           const category = this.categorizeToolFailure(error);
           const message = error instanceof Error ? error.message : 'Tool execution failed';
@@ -128,6 +173,8 @@ export class ToolService {
             where: { id: execution.id },
             data: {
               status: ToolExecutionStatus.FAILED,
+              progressMessage: 'Tool failed',
+              partialOutput: null,
               errorMessage: message,
               finishedAt: new Date()
             }

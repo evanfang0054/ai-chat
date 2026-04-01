@@ -33,7 +33,15 @@ interface ScheduleSummaryLikeBase {
   enabled: boolean;
   lastRunAt: Date | null;
   nextRunAt: Date | null;
+  latestRunId: string | null;
   latestRunStatus: ScheduleRunStatus | null;
+  latestRunStage: RunStage | null;
+  latestRunStartedAt: Date | null;
+  latestRunFinishedAt: Date | null;
+  latestRequestId: string | null;
+  latestSessionId: string | null;
+  latestMessageId: string | null;
+  latestToolExecutionCount: number;
   latestFailureMessage: string | null;
   latestResultSummary: string | null;
   createdAt: Date;

@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Injectable, Inject, Logger, forwardRef } from '@nestjs/common';
 import type { ErrorCategory, RunStage } from '@ai-chat/shared';
 
 import { env } from '../../common/config/env';
@@ -26,6 +27,13 @@ interface ScheduleRecord {
 
 interface ScheduleRunRecord {
   id: string;
+  requestId: string | null;
+}
+
+interface TriggerRunInput {
+  schedule: ScheduleRecord;
+  run: ScheduleRunRecord;
+  triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
 }
 
 interface RunFailureDetails {
@@ -41,7 +49,7 @@ export class ScheduleRunnerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly chatService: ChatService,
-    private readonly agentService: AgentService
+    @Inject(forwardRef(() => AgentService)) private readonly agentService: AgentService
   ) {}
 
   private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -56,9 +64,22 @@ export class ScheduleRunnerService {
     ]);
   }
 
-  async processDueSchedules(now = new Date()) {
-    this.logger.debug('schedule_runner_scan_started', { now: now.toISOString() });
+  async triggerRun(input: TriggerRunInput) {
+    const { schedule, run, triggerSource } = input;
 
+    await this.prisma.scheduleRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'RUNNING',
+        stage: 'PREPARING',
+        requestId: run.requestId,
+        startedAt: new Date()
+      }
+    });
+
+    await this.executeRun(schedule, run, triggerSource);
+  }
+  async processDueSchedules(now: Date = new Date()) {
     const schedules = await this.prisma.schedule.findMany({
       where: {
         enabled: true,
@@ -76,9 +97,12 @@ export class ScheduleRunnerService {
   }
 
   private async processSchedule(schedule: ScheduleRecord, now: Date) {
+    const requestId = randomUUID();
+
     this.logger.debug('schedule_runner_claim_started', {
       scheduleId: schedule.id,
       userId: schedule.userId,
+      requestId,
       now: now.toISOString()
     });
 
@@ -112,15 +136,20 @@ export class ScheduleRunnerService {
       return;
     }
 
-    const run = await this.prisma.scheduleRun.create({
+    const run: ScheduleRunRecord = await this.prisma.scheduleRun.create({
       data: {
         scheduleId: schedule.id,
         userId: schedule.userId,
+        requestId,
         status: 'RUNNING',
-        stage: 'AGENT',
+        stage: 'PREPARING',
         triggerSource: 'SCHEDULE',
         taskPromptSnapshot: schedule.taskPrompt,
         startedAt: now
+      },
+      select: {
+        id: true,
+        requestId: true
       }
     });
 
@@ -128,10 +157,15 @@ export class ScheduleRunnerService {
       scheduleId: schedule.id,
       runId: run.id,
       userId: schedule.userId,
+      requestId: run.requestId,
       type: schedule.type
     });
 
-    await this.executeRun(schedule, run);
+    await this.triggerRun({
+      schedule,
+      run,
+      triggerSource: 'SCHEDULE'
+    });
 
     if (schedule.type === 'ONE_TIME') {
       await this.prisma.schedule.update({
@@ -141,45 +175,45 @@ export class ScheduleRunnerService {
     }
   }
 
-  private async executeRun(schedule: ScheduleRecord, run: ScheduleRunRecord) {
+  private async executeRun(schedule: ScheduleRecord, run: ScheduleRunRecord, triggerSource: 'SCHEDULE' | 'MANUAL_RETRY') {
     this.logger.debug('schedule_runner_execution_started', {
       scheduleId: schedule.id,
       runId: run.id,
       userId: schedule.userId
     });
 
-    const { session } = await this.chatService.createSessionWithFirstMessage(schedule.userId, schedule.taskPrompt);
-    let assistantText = '';
+    const { session, userMessage } = await this.chatService.createSessionWithFirstMessage(
+      schedule.userId,
+      schedule.taskPrompt,
+      run.id
+    );
 
     try {
-      await this.withTimeout(
-        (async () => {
-          for await (const event of this.agentService.streamChatReply({
-            userId: schedule.userId,
-            sessionId: session.id,
-            history: [],
-            prompt: schedule.taskPrompt,
-            forcedToolCall: this.buildForcedToolCall(schedule.taskPrompt),
-            scheduleId: schedule.id,
-            runId: run.id
-          })) {
-            if (event.type === 'text-delta') {
-              assistantText += event.textDelta;
-            }
-          }
-        })(),
+      const result = await this.withTimeout(
+        this.agentService.execute({
+          userId: schedule.userId,
+          sessionId: session.id,
+          messageId: userMessage.id,
+          history: [],
+          prompt: schedule.taskPrompt,
+          forcedToolCall: this.buildForcedToolCall(schedule.taskPrompt),
+          scheduleId: schedule.id,
+          runId: run.id,
+          requestId: run.requestId ?? undefined,
+          triggerSource
+        }),
         env.SCHEDULE_RUN_TIMEOUT_MS,
         `Schedule run (${schedule.id})`
       );
 
-      await this.chatService.saveAssistantMessage(session.id, assistantText);
+      await this.chatService.saveAssistantMessage(session.id, result.text, run.id);
       await this.prisma.scheduleRun.update({
         where: { id: run.id },
         data: {
-          status: 'SUCCEEDED',
-          stage: 'COMPLETED',
+          status: 'COMPLETED',
+          stage: 'FINALIZING',
           errorCategory: null,
-          resultSummary: assistantText.slice(0, 280),
+          resultSummary: result.text.slice(0, 280),
           chatSessionId: session.id,
           finishedAt: new Date()
         }
@@ -189,7 +223,7 @@ export class ScheduleRunnerService {
         runId: run.id,
         userId: schedule.userId,
         sessionId: session.id,
-        resultSummaryLength: assistantText.slice(0, 280).length
+        resultSummaryLength: result.text.slice(0, 280).length
       });
     } catch (error) {
       const failure = this.toRunFailureDetails(error);
@@ -220,6 +254,26 @@ export class ScheduleRunnerService {
     if (
       typeof error === 'object' &&
       error !== null &&
+      'details' in error &&
+      typeof error.details === 'object' &&
+      error.details !== null &&
+      'stage' in error.details &&
+      'errorCategory' in error.details &&
+      'errorMessage' in error.details &&
+      typeof error.details.stage === 'string' &&
+      typeof error.details.errorCategory === 'string' &&
+      typeof error.details.errorMessage === 'string'
+    ) {
+      return {
+        stage: error.details.stage as RunStage,
+        errorCategory: error.details.errorCategory as ErrorCategory,
+        errorMessage: error.details.errorMessage
+      };
+    }
+
+    if (
+      typeof error === 'object' &&
+      error !== null &&
       'stage' in error &&
       'errorCategory' in error &&
       'errorMessage' in error &&
@@ -236,15 +290,15 @@ export class ScheduleRunnerService {
 
     if (error instanceof Error && /timeout$/i.test(error.message)) {
       return {
-        stage: 'AGENT',
-        errorCategory: 'EXTERNAL_ERROR',
+        stage: 'FINALIZING',
+        errorCategory: 'TIMEOUT_ERROR',
         errorMessage: error.message
       };
     }
 
     return {
-      stage: 'AGENT',
-      errorCategory: 'INTERNAL_ERROR',
+      stage: 'FINALIZING',
+      errorCategory: 'SYSTEM_ERROR',
       errorMessage: error instanceof Error ? error.message : 'Schedule run failed'
     };
   }

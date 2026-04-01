@@ -1,45 +1,26 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
-import type {
-  ErrorCategory,
-  ToolExecutionFailedSummary,
-  ToolExecutionRunningSummary,
-  ToolExecutionSucceededSummary,
-  ToolName
-} from '@ai-chat/shared';
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import type { FailureCategory, RunStage, RunSummary, ToolName, ToolExecutionSummary } from '@ai-chat/shared';
 import { env } from '../../common/config/env';
 import { LlmService } from '../llm/llm.service';
 import { ToolService } from '../tool/tool.service';
 import type {
-  AgentExecutionContext,
   AgentFailureDetails,
   AgentHistoryMessage,
-  AgentStreamEvent,
-  StreamChatReplyInput
+  AgentLoopEvent,
+  AgentRunContext,
+  ExecutionRequest,
+  ForcedToolCall,
+  StreamChatReplyResult
 } from './agent.types';
+import { routeExecutionIntent } from './agent-intent-router';
 
-const AGENT_SYSTEM_PROMPT = `You are a tool-using assistant inside an AI chat product.
+const MAX_REPAIR_ATTEMPTS = 1;
 
-Rules:
-- If the user asks you to perform an action that matches an available tool, call the tool instead of asking a follow-up question.
-- If a schedule or time request can be completed with a reasonable default timezone, use UTC by default.
-- Do not ask the user for timezone before creating a schedule unless timezone is explicitly required to avoid an incorrect result.
-- When the user asks to create, update, list, enable, disable, or delete schedules, prefer using manage_schedule.
-- For schedule creation requests written in natural language, infer the structured manage_schedule arguments yourself whenever a reasonable default exists.
-- When creating schedules, translate phrases like "every 10 seconds", "every minute", or "tomorrow at 9am" into manage_schedule fields such as type, cronExpr, intervalMs, runAt, title, taskPrompt, and timezone.
-- For "every X seconds" or "every X minutes" (where X < 60), use type=INTERVAL with intervalMs (in milliseconds). For example: "every 10 seconds" = type=INTERVAL, intervalMs=10000.
-- For standard cron patterns like "every hour", "daily at 9am", use type=CRON with cronExpr.
-- For one-time schedules like "tomorrow at 9am", use type=ONE_TIME with runAt.
-- If the user describes the task to run, copy that instruction into taskPrompt and create a short title instead of asking for one.
-- Before deleting a schedule, require an explicit user confirmation in natural language unless the user has already clearly confirmed that exact deletion request.
-- If the user wants to update, enable, disable, or delete a schedule but the target schedule is ambiguous, prefer calling manage_schedule with action="list" first or ask a disambiguation question instead of guessing.
-- When the user asks for the current time, prefer using get_current_time.
-- After a tool succeeds, briefly confirm the result in natural language.
-- Only ask a follow-up question when a required tool argument cannot be inferred and no safe default exists.`;
-
-class AgentToolExecutionFailedError extends Error {
-  constructor(public readonly execution: ToolExecutionFailedSummary) {
-    super(execution.errorMessage);
+class AgentRuntimeError extends Error {
+  constructor(public readonly details: AgentFailureDetails) {
+    super(details.errorMessage);
   }
 }
 
@@ -52,135 +33,324 @@ export class AgentService {
     private readonly toolService: ToolService
   ) {}
 
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs);
-        if (typeof timer === 'object' && typeof timer.unref === 'function') {
-          timer.unref();
-        }
-      })
-    ]);
-  }
+  async execute(
+    request: ExecutionRequest,
+    onEvent?: (event: AgentLoopEvent) => void
+  ): Promise<StreamChatReplyResult> {
+    const route = routeExecutionIntent(request);
+    const context: AgentRunContext = {
+      userId: request.userId,
+      sessionId: request.sessionId,
+      messageId: request.messageId ?? null,
+      runId: request.runId ?? randomUUID(),
+      scheduleId: request.scheduleId ?? null,
+      requestId: route.diagnostics.requestId,
+      triggerSource: request.triggerSource,
+      intent: route.intent,
+      maxIterations: route.maxIterations
+    };
 
-  async *streamChatReply(input: StreamChatReplyInput): AsyncGenerator<AgentStreamEvent> {
-    const executionContext = this.buildExecutionContext(input);
+    const events: AgentLoopEvent[] = [];
+    let run = this.createRunSummary(context, 'RUNNING', 'PREPARING');
+    const appendEvent = (event: AgentLoopEvent) => {
+      events.push(event);
+      onEvent?.(event);
+      if (event.type === 'run_stage_changed' || event.type === 'run_repaired') {
+        run = event.run;
+      }
+    };
+
     this.logger.log('agent_reply_started', {
-      ...executionContext,
-      hasForcedToolCall: Boolean(input.forcedToolCall)
+      userId: context.userId,
+      sessionId: context.sessionId,
+      runId: context.runId,
+      messageId: context.messageId,
+      requestId: context.requestId,
+      triggerSource: context.triggerSource,
+      intent: context.intent,
+      hasForcedToolCall: Boolean(route.forcedToolCall)
     });
 
-    if (input.forcedToolCall) {
-      let hasOutput = false;
-
-      try {
-        for await (const event of this.runToolCall(input.forcedToolCall.name, input.forcedToolCall.input, input)) {
-          if (event.type === 'text-delta' && event.textDelta) {
-            hasOutput = true;
-          }
-          yield event;
-        }
-
-        if (!hasOutput) {
-          throw new Error('Agent response was empty');
-        }
-
-        this.logger.log('agent_reply_finished', {
-          ...executionContext,
-          finishReason: 'forced_tool_call_completed'
-        });
-        yield { type: 'finish' };
-        return;
-      } catch (error) {
-        const failure = this.toAgentFailureDetails(error);
-        this.logger.error('agent_reply_failed', {
-          ...executionContext,
-          ...failure
-        });
-        yield { type: 'agent-error', error: failure };
-        throw error;
-      }
-    }
-
-    const model = this.llmService.createChatModel();
-    const messages = [
-      new SystemMessage(AGENT_SYSTEM_PROMPT),
-      ...input.history.map((message) => this.toLangChainMessage(message)),
-      new HumanMessage(input.prompt)
-    ];
+    appendEvent({ type: 'run_stage_changed', run });
 
     try {
-      const toolAwareModel = model.bindTools(this.createLangChainTools() as never, {
-        tool_choice: 'auto'
-      });
-      const response = await this.withTimeout(
-        toolAwareModel.invoke(messages),
-        env.CHAT_STREAM_TIMEOUT_MS,
-        'Agent LLM response'
-      );
-      let hasOutput = false;
+      let text = '';
 
-      const toolCalls = this.readToolCalls(response);
-      if (toolCalls.length > 0) {
-        for (const toolCall of toolCalls) {
-          for await (const event of this.runToolCall(toolCall.name, this.readToolCallInput(toolCall.args), input)) {
-            if (event.type === 'text-delta' && event.textDelta) {
-              hasOutput = true;
-            }
-            yield event;
-          }
-        }
+      if (route.forcedToolCall) {
+        const toolOutcome = await this.executeToolCall(route.forcedToolCall, context, appendEvent);
+        text += this.buildToolResponseText(toolOutcome.outputText);
+      } else {
+        text = await this.executeAgentLoop(request.history, request.prompt, route.systemPrompt, context, appendEvent);
       }
 
-      const text = toolCalls.length === 0 ? this.readChunkText(response.content) : '';
-      if (text) {
-        hasOutput = true;
-        yield { type: 'text-delta', textDelta: text };
+      if (!text.trim()) {
+        throw new AgentRuntimeError({
+          stage: 'FINALIZING',
+          errorCategory: 'SYSTEM_ERROR',
+          errorMessage: 'Agent response was empty',
+          repairAction: null
+        });
       }
 
-      if (!hasOutput) {
-        throw new Error('Agent response was empty');
-      }
+      run = this.createRunSummary(context, 'COMPLETED', 'FINALIZING');
+      appendEvent({ type: 'run_stage_changed', run });
 
       this.logger.log('agent_reply_finished', {
-        ...executionContext,
-        finishReason: toolCalls.length > 0 ? 'tool_call_completed' : 'text_completed'
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+        requestId: context.requestId,
+        textLength: text.length
       });
-      yield { type: 'finish' };
+
+      return {
+        text,
+        run,
+        events
+      };
     } catch (error) {
-      const failure = this.toAgentFailureDetails(error);
+      const details = this.toAgentFailureDetails(error);
+      run = this.createRunSummary(context, 'FAILED', details.stage, details);
+      appendEvent({ type: 'run_stage_changed', run });
+
       this.logger.error('agent_reply_failed', {
-        ...executionContext,
-        ...failure
+        userId: context.userId,
+        sessionId: context.sessionId,
+        runId: context.runId,
+        requestId: context.requestId,
+        stage: details.stage,
+        errorCategory: details.errorCategory,
+        errorMessage: details.errorMessage
       });
-      yield { type: 'agent-error', error: failure };
-      throw error;
+
+      throw new AgentRuntimeError(details);
     }
   }
 
-  private buildExecutionContext(input: StreamChatReplyInput): AgentExecutionContext {
+  private async executeAgentLoop(
+    history: AgentHistoryMessage[],
+    prompt: string,
+    systemPrompt: string,
+    context: AgentRunContext,
+    appendEvent: (event: AgentLoopEvent) => void
+  ) {
+    const model = this.llmService.createChatModel();
+    const toolAwareModel = model.bindTools(this.createLangChainTools() as never, {
+      tool_choice: 'auto'
+    });
+    const conversation = [
+      new SystemMessage(systemPrompt),
+      ...history.map((message) => this.toLangChainMessage(message)),
+      new HumanMessage(prompt)
+    ];
+
+    let collectedText = '';
+    let repairCount = 0;
+
+    for (let iteration = 0; iteration < context.maxIterations; iteration += 1) {
+      appendEvent({ type: 'run_stage_changed', run: this.createRunSummary(context, 'RUNNING', 'MODEL_CALLING') });
+
+      let response: AIMessage;
+      try {
+        response = await this.withTimeout(
+          toolAwareModel.invoke(conversation),
+          env.CHAT_STREAM_TIMEOUT_MS,
+          'Agent LLM response'
+        );
+      } catch (error) {
+        throw this.wrapModelError(error, 'MODEL_CALLING');
+      }
+
+      const text = this.readChunkText(response.content);
+      if (text) {
+        collectedText += text;
+        appendEvent({
+          type: 'text_delta',
+          runId: context.runId ?? randomUUID(),
+          messageId: context.messageId ?? `assistant-${context.sessionId}`,
+          textDelta: text
+        });
+      }
+
+      const toolCalls = this.readToolCalls(response);
+      if (toolCalls.length === 0) {
+        return collectedText;
+      }
+
+      appendEvent({ type: 'run_stage_changed', run: this.createRunSummary(context, 'RUNNING', 'TOOL_RUNNING') });
+      conversation.push(response);
+
+      for (let toolCallIndex = 0; toolCallIndex < toolCalls.length; toolCallIndex += 1) {
+        const toolCall = toolCalls[toolCallIndex];
+        try {
+          const toolOutcome = await this.executeToolCall(
+            {
+              name: toolCall.name as ToolName,
+              input: this.readToolCallInput(toolCall.args)
+            },
+            context,
+            appendEvent
+          );
+
+          conversation.push(
+            new ToolMessage({
+              tool_call_id: toolCall.id,
+              content: toolOutcome.outputText ?? ''
+            })
+          );
+        } catch (error) {
+          const runtimeError = this.toAgentRuntimeError(error, 'TOOL_RUNNING');
+          conversation.push(
+            new ToolMessage({
+              tool_call_id: toolCall.id,
+              content: runtimeError.details.errorMessage
+            })
+          );
+
+          for (const skippedToolCall of toolCalls.slice(toolCallIndex + 1)) {
+            conversation.push(
+              new ToolMessage({
+                tool_call_id: skippedToolCall.id,
+                content: 'Skipped because another tool call in the same assistant turn failed before execution.'
+              })
+            );
+          }
+
+          if (repairCount >= MAX_REPAIR_ATTEMPTS) {
+            throw runtimeError;
+          }
+
+          repairCount += 1;
+          const repaired = this.createRunSummary(context, 'RUNNING', 'REPAIRING');
+          appendEvent({ type: 'run_repaired', run: repaired, repairAction: 'retry_tool_loop_once' });
+          appendEvent({ type: 'run_stage_changed', run: repaired });
+          conversation.push(new HumanMessage('The previous tool call failed. Try one more time with corrected arguments or continue without that tool if appropriate.'));
+          break;
+        }
+      }
+    }
+
+    throw new AgentRuntimeError({
+      stage: 'FINALIZING',
+      errorCategory: 'TIMEOUT_ERROR',
+      errorMessage: `Agent exceeded max iterations (${context.maxIterations})`,
+      repairAction: null
+    });
+  }
+
+  private async executeToolCall(
+    toolCall: ForcedToolCall,
+    context: AgentRunContext,
+    appendEvent: (event: AgentLoopEvent) => void
+  ) {
+    const started = await this.toolService.startToolExecution(toolCall.name, toolCall.input, {
+      sessionId: context.sessionId,
+      userId: context.userId,
+      scheduleId: context.scheduleId ?? undefined,
+      runId: context.runId ?? undefined,
+      messageId: context.messageId ?? undefined,
+      requestId: context.requestId
+    });
+
+    const startedSummary = this.toToolExecutionSummary(started.execution, null);
+    appendEvent({ type: 'tool_started', toolExecution: startedSummary });
+    appendEvent({ type: 'tool_progressed', toolExecution: startedSummary });
+
+    try {
+      const result = await this.withTimeout(
+        started.run(),
+        env.TOOL_EXECUTION_TIMEOUT_MS,
+        `Agent tool call (${toolCall.name})`
+      );
+      const completedSummary = this.toToolExecutionSummary(result.execution, null);
+      appendEvent({ type: 'tool_completed', toolExecution: completedSummary });
+      return result;
+    } catch (error) {
+      const executionWithCategory = this.readExecutionFromError(error);
+      if (!executionWithCategory) {
+        throw this.wrapToolError(error, 'TOOL_RUNNING');
+      }
+
+      const failedSummary = this.toToolExecutionSummary(
+        executionWithCategory.execution,
+        executionWithCategory.category
+      );
+      appendEvent({ type: 'tool_failed', toolExecution: failedSummary });
+      throw new AgentRuntimeError({
+        stage: 'TOOL_RUNNING',
+        errorCategory: executionWithCategory.category,
+        errorMessage: failedSummary.errorMessage ?? 'Tool execution failed',
+        repairAction: 'tool_execution_failed'
+      });
+    }
+  }
+
+  private createRunSummary(
+    context: AgentRunContext,
+    status: RunSummary['status'],
+    stage: RunStage,
+    failure?: Pick<AgentFailureDetails, 'errorCategory' | 'errorMessage'> | null
+  ): RunSummary {
     return {
-      userId: input.userId,
-      sessionId: input.sessionId,
-      scheduleId: input.scheduleId ?? null,
-      runId: input.runId ?? null
+      id: context.runId ?? context.requestId,
+      sessionId: context.sessionId,
+      messageId: context.messageId,
+      scheduleId: context.scheduleId,
+      status,
+      stage,
+      triggerSource: context.triggerSource,
+      failureCategory: failure?.errorCategory ?? null,
+      failureCode: null,
+      failureMessage: failure?.errorMessage ?? null,
+      startedAt: null,
+      finishedAt: null
     };
   }
 
+  private wrapModelError(error: unknown, stage: RunStage) {
+    if (error instanceof AgentRuntimeError) {
+      return error;
+    }
+
+    return new AgentRuntimeError({
+      stage,
+      errorCategory: error instanceof Error && /timeout$/i.test(error.message) ? 'TIMEOUT_ERROR' : 'MODEL_ERROR',
+      errorMessage: error instanceof Error ? error.message : 'Model execution failed',
+      repairAction: null
+    });
+  }
+
+  private wrapToolError(error: unknown, stage: RunStage) {
+    if (error instanceof AgentRuntimeError) {
+      return error;
+    }
+
+    return new AgentRuntimeError({
+      stage,
+      errorCategory: error instanceof Error && /timeout$/i.test(error.message) ? 'TIMEOUT_ERROR' : 'TOOL_ERROR',
+      errorMessage: error instanceof Error ? error.message : 'Tool execution failed',
+      repairAction: null
+    });
+  }
+
+  private toAgentRuntimeError(error: unknown, stage: RunStage) {
+    if (error instanceof AgentRuntimeError) {
+      return error;
+    }
+
+    return this.wrapToolError(error, stage);
+  }
+
   private toAgentFailureDetails(error: unknown): AgentFailureDetails {
-    if (error instanceof AgentToolExecutionFailedError) {
-      return {
-        stage: 'TOOL',
-        errorCategory: error.execution.errorCategory,
-        errorMessage: error.execution.errorMessage
-      };
+    if (error instanceof AgentRuntimeError) {
+      return error.details;
     }
 
     return {
-      stage: 'LLM',
-      errorCategory: 'INTERNAL_ERROR',
-      errorMessage: error instanceof Error ? error.message : 'Agent execution failed'
+      stage: 'FINALIZING',
+      errorCategory: 'SYSTEM_ERROR',
+      errorMessage: error instanceof Error ? error.message : 'Agent execution failed',
+      repairAction: null
     };
   }
 
@@ -192,172 +362,41 @@ export class AgentService {
     }));
   }
 
-  private async *runToolCall(
-    name: string,
-    toolInput: Record<string, unknown>,
-    context: StreamChatReplyInput
-  ): AsyncGenerator<AgentStreamEvent> {
-    const executionContext = this.buildExecutionContext(context);
-    const started = await this.toolService.startToolExecution(name, toolInput, {
-      sessionId: context.sessionId,
-      userId: context.userId,
-      scheduleId: context.scheduleId,
-      runId: context.runId
-    });
-
-    this.logger.log('agent_tool_call_started', {
-      ...executionContext,
-      toolName: name,
-      toolExecutionId: started.execution.id
-    });
-    yield { type: 'tool-input-start', toolExecution: this.toRunningExecutionSummary(started.execution) };
-    yield { type: 'tool-input-available', toolExecution: this.toRunningExecutionSummary(started.execution) };
-
-    try {
-      const result = await this.withTimeout(started.run(), env.TOOL_EXECUTION_TIMEOUT_MS, `Agent tool call (${name})`);
-      this.logger.log('agent_tool_call_succeeded', {
-        ...executionContext,
-        toolName: name,
-        toolExecutionId: result.execution.id
-      });
-      yield {
-        type: 'tool-output-available',
-        toolExecution: this.toSucceededExecutionSummary(result.execution)
-      };
-
-      const response = this.buildToolResponseText(result.outputText);
-      if (response) {
-        yield { type: 'text-delta', textDelta: response };
-      }
-    } catch (error) {
-      const executionWithCategory = this.readExecutionFromError(error);
-      if (!executionWithCategory) {
-        throw error;
-      }
-
-      const failedSummary = this.toFailedExecutionSummary(
-        executionWithCategory.execution,
-        executionWithCategory.category
-      );
-      this.logger.error('agent_tool_call_failed', {
-        ...executionContext,
-        toolName: name,
-        toolExecutionId: failedSummary.id,
-        errorCategory: failedSummary.errorCategory,
-        errorMessage: failedSummary.errorMessage
-      });
-      yield {
-        type: 'tool-output-error',
-        toolExecution: failedSummary
-      };
-      throw new AgentToolExecutionFailedError(failedSummary);
-    }
-  }
-
-  private readToolCalls(response: { tool_calls?: unknown }) {
-    if (Array.isArray(response.tool_calls)) {
-      return response.tool_calls.filter(
-        (toolCall): toolCall is { name: string; args: unknown } =>
-          typeof toolCall === 'object' && toolCall !== null && typeof toolCall.name === 'string'
-      );
-    }
-
-    return [];
-  }
-
-  private readToolCallInput(args: unknown) {
-    if (typeof args === 'object' && args !== null) {
-      return args as Record<string, unknown>;
-    }
-
-    return {};
-  }
-
-  private toRunningExecutionSummary(execution: {
-    id: string;
-    sessionId: string;
-    toolName: string;
-    status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-    input: unknown;
-    output: unknown;
-    errorMessage: string | null;
-    startedAt: Date | string;
-    finishedAt: Date | string | null;
-  }): ToolExecutionRunningSummary {
-    return {
-      id: execution.id,
-      sessionId: execution.sessionId,
-      toolName: execution.toolName as ToolName,
-      status: 'RUNNING',
-      input: this.toNullableJsonString(execution.input),
-      output: null,
-      errorCategory: null,
-      errorMessage: null,
-      startedAt: this.toIsoString(execution.startedAt),
-      finishedAt: null
-    };
-  }
-
-  private toSucceededExecutionSummary(execution: {
-    id: string;
-    sessionId: string;
-    toolName: string;
-    status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-    input: unknown;
-    output: unknown;
-    errorMessage: string | null;
-    startedAt: Date | string;
-    finishedAt: Date | string | null;
-  }): ToolExecutionSucceededSummary {
-    const finishedAt = execution.finishedAt;
-    if (finishedAt === null) {
-      throw new Error('Succeeded tool execution is missing finishedAt');
-    }
-
-    return {
-      id: execution.id,
-      sessionId: execution.sessionId,
-      toolName: execution.toolName as ToolName,
-      status: 'SUCCEEDED',
-      input: this.toNullableJsonString(execution.input),
-      output: this.toNullableJsonString(execution.output),
-      errorCategory: null,
-      errorMessage: null,
-      startedAt: this.toIsoString(execution.startedAt),
-      finishedAt: this.toIsoString(finishedAt)
-    };
-  }
-
-  private toFailedExecutionSummary(
+  private toToolExecutionSummary(
     execution: {
       id: string;
       sessionId: string;
+      runId?: string | null;
+      messageId?: string | null;
       toolName: string;
-      status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+      status: string;
       input: unknown;
       output: unknown;
+      progressMessage?: string | null;
+      partialOutput?: string | null;
       errorMessage: string | null;
       startedAt: Date | string;
       finishedAt: Date | string | null;
     },
-    errorCategory: ErrorCategory
-  ): ToolExecutionFailedSummary {
-    const finishedAt = execution.finishedAt;
-    if (finishedAt === null) {
-      throw new Error('Failed tool execution is missing finishedAt');
-    }
-
+    failureCategory: FailureCategory | null
+  ): ToolExecutionSummary {
     return {
       id: execution.id,
       sessionId: execution.sessionId,
-      toolName: execution.toolName as ToolName,
-      status: 'FAILED',
+      runId: execution.runId ?? null,
+      messageId: execution.messageId ?? null,
+      toolName: execution.toolName as ToolExecutionSummary['toolName'],
+      status: execution.status as ToolExecutionSummary['status'],
+      progressMessage: execution.progressMessage ?? null,
       input: this.toNullableJsonString(execution.input),
-      output: this.toNullableJsonString(execution.output),
-      errorCategory,
-      errorMessage: execution.errorMessage ?? 'Tool execution failed',
+      output: execution.status === 'SUCCEEDED' ? this.toNullableJsonString(execution.output) : null,
+      partialOutput: execution.partialOutput ?? null,
+      errorCategory: failureCategory,
+      errorMessage: failureCategory ? execution.errorMessage ?? 'Tool execution failed' : null,
+      canRetry: execution.status === 'FAILED',
+      canCancel: execution.status === 'PENDING' || execution.status === 'RUNNING',
       startedAt: this.toIsoString(execution.startedAt),
-      finishedAt: this.toIsoString(finishedAt)
+      finishedAt: execution.finishedAt ? this.toIsoString(execution.finishedAt) : null
     };
   }
 
@@ -367,19 +406,35 @@ export class AgentService {
         execution: {
           id: string;
           sessionId: string;
+          runId?: string | null;
+          messageId?: string | null;
           toolName: string;
-          status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+          status: string;
           input: unknown;
           output: unknown;
+          progressMessage?: string | null;
+          partialOutput?: string | null;
           errorMessage: string | null;
           startedAt: Date | string;
           finishedAt: Date | string | null;
         };
-        category: ErrorCategory;
+        category: FailureCategory;
       };
     }
 
     return null;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs);
+        if (typeof timer === 'object' && typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      })
+    ]);
   }
 
   private buildToolResponseText(outputText: string | null) {
@@ -440,6 +495,72 @@ export class AgentService {
       return new AIMessage(message.content);
     }
     return new HumanMessage(message.content);
+  }
+
+  private readToolCalls(response: {
+    tool_calls?: unknown;
+    additional_kwargs?: { tool_calls?: unknown };
+  }) {
+    const normalizedToolCalls = this.normalizeToolCalls(response.tool_calls);
+    if (normalizedToolCalls.length > 0) {
+      return normalizedToolCalls;
+    }
+
+    return this.normalizeOpenAiCompatibleToolCalls(response.additional_kwargs?.tool_calls);
+  }
+
+  private normalizeToolCalls(toolCalls: unknown) {
+    if (!Array.isArray(toolCalls)) {
+      return [];
+    }
+
+    return toolCalls.filter(
+      (toolCall): toolCall is { id: string; name: string; args: unknown } =>
+        typeof toolCall === 'object' &&
+        toolCall !== null &&
+        typeof toolCall.id === 'string' &&
+        typeof toolCall.name === 'string'
+    );
+  }
+
+  private normalizeOpenAiCompatibleToolCalls(toolCalls: unknown) {
+    if (!Array.isArray(toolCalls)) {
+      return [];
+    }
+
+    return toolCalls.flatMap((toolCall) => {
+      if (typeof toolCall !== 'object' || toolCall === null || typeof toolCall.id !== 'string') {
+        return [];
+      }
+
+      const rawFunction = 'function' in toolCall ? toolCall.function : null;
+      if (typeof rawFunction !== 'object' || rawFunction === null || typeof rawFunction.name !== 'string') {
+        return [];
+      }
+
+      const rawArguments = rawFunction.arguments;
+      if (typeof rawArguments === 'string') {
+        try {
+          return [{ id: toolCall.id, name: rawFunction.name, args: JSON.parse(rawArguments) as unknown }];
+        } catch {
+          return [{ id: toolCall.id, name: rawFunction.name, args: {} }];
+        }
+      }
+
+      if (typeof rawArguments === 'object' && rawArguments !== null) {
+        return [{ id: toolCall.id, name: rawFunction.name, args: rawArguments }];
+      }
+
+      return [{ id: toolCall.id, name: rawFunction.name, args: {} }];
+    });
+  }
+
+  private readToolCallInput(args: unknown) {
+    if (typeof args === 'object' && args !== null) {
+      return args as Record<string, unknown>;
+    }
+
+    return {};
   }
 
   private readChunkText(content: unknown) {

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, forwardRef } from '@nestjs/common';
 import type {
   CreateScheduleRequest,
   ListScheduleRunsResponse,
@@ -10,12 +10,16 @@ import type {
 } from '@ai-chat/shared';
 
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { ScheduleRunnerService } from './schedule-runner.service';
 import type { ScheduleFilters, ScheduleRunFilters, ScheduleSummaryLike } from './schedule.types';
 import { computeNextRunAt, toScheduleSummary, validateScheduleInput } from './schedule.utils';
 
 @Injectable()
 export class ScheduleService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => ScheduleRunnerService)) private readonly scheduleRunnerService: ScheduleRunnerService
+  ) {}
 
   async createSchedule(userId: string, input: CreateScheduleRequest) {
     validateScheduleInput(input);
@@ -224,6 +228,19 @@ export class ScheduleService {
               select: {
                 id: true
               }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
+              }
             }
           }
         }
@@ -246,6 +263,19 @@ export class ScheduleService {
             toolExecutions: {
               select: {
                 id: true
+              }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
               }
             }
           }
@@ -271,6 +301,19 @@ export class ScheduleService {
               select: {
                 id: true
               }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
+              }
             }
           }
         }
@@ -281,12 +324,15 @@ export class ScheduleService {
       throw new NotFoundException('Schedule run not found');
     }
 
+    const schedule = await this.getScheduleOrThrow(userId, run.scheduleId);
+    const rerunRequestId = `${run.requestId ?? run.id}-retry-${Date.now()}`;
     const rerun = await this.prisma.scheduleRun.create({
       data: {
         scheduleId: run.scheduleId,
         userId,
+        requestId: rerunRequestId,
         status: 'PENDING',
-        stage: 'QUEUED',
+        stage: 'PREPARING',
         triggerSource: 'MANUAL_RETRY',
         taskPromptSnapshot: run.taskPromptSnapshot
       },
@@ -298,10 +344,45 @@ export class ScheduleService {
               select: {
                 id: true
               }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
+              }
             }
           }
         }
       }
+    });
+
+    void this.scheduleRunnerService.triggerRun({
+      schedule: {
+        id: schedule.id,
+        userId: schedule.userId,
+        title: schedule.title,
+        taskPrompt: rerun.taskPromptSnapshot,
+        type: schedule.type,
+        cronExpr: schedule.cronExpr,
+        intervalMs: schedule.intervalMs,
+        runAt: schedule.runAt,
+        timezone: schedule.timezone,
+        enabled: schedule.enabled,
+        lastRunAt: schedule.lastRunAt,
+        nextRunAt: schedule.nextRunAt
+      },
+      run: {
+        id: rerun.id,
+        requestId: rerun.requestId
+      },
+      triggerSource: 'MANUAL_RETRY'
     });
 
     return {
@@ -313,10 +394,26 @@ export class ScheduleService {
     id: string;
     scheduleId: string;
     userId: string;
-    status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-    stage?: 'QUEUED' | 'AGENT' | 'LLM' | 'TOOL' | 'PERSISTENCE' | 'COMPLETED' | null;
-    errorCategory?: 'USER_ERROR' | 'EXTERNAL_ERROR' | 'INTERNAL_ERROR' | null;
-    triggerSource?: 'SCHEDULE' | 'MANUAL_RETRY' | null;
+    requestId: string | null;
+    status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+    stage:
+      | 'PREPARING'
+      | 'ROUTING'
+      | 'MODEL_CALLING'
+      | 'TOOL_RUNNING'
+      | 'REPAIRING'
+      | 'PERSISTING'
+      | 'FINALIZING';
+    errorCategory:
+      | 'INPUT_ERROR'
+      | 'TOOL_ERROR'
+      | 'MODEL_ERROR'
+      | 'DEPENDENCY_ERROR'
+      | 'TIMEOUT_ERROR'
+      | 'SYSTEM_ERROR'
+      | 'CANCELLED'
+      | null;
+    triggerSource: 'USER' | 'SCHEDULE' | 'MANUAL_RETRY' | 'DIAGNOSTICS_REPLAY';
     taskPromptSnapshot: string;
     resultSummary: string | null;
     errorMessage: string | null;
@@ -328,6 +425,11 @@ export class ScheduleService {
       toolExecutions: Array<{
         id: string;
       }>;
+      messages: Array<{
+        id: string;
+        runId: string | null;
+        createdAt: Date;
+      }>;
     } | null;
     schedule: {
       id: string;
@@ -336,92 +438,38 @@ export class ScheduleService {
     };
   }): ScheduleRunSummary {
     const toolExecutionCount = run.chatSession?.toolExecutions.length ?? 0;
-    const triggerSource = run.triggerSource ?? 'SCHEDULE';
     const durationMs = run.startedAt && run.finishedAt ? run.finishedAt.getTime() - run.startedAt.getTime() : null;
-    const summaryBase = {
+    const messageId = run.chatSession?.messages.find((message) => message.runId === run.id)?.id ?? null;
+
+    return {
       id: run.id,
+      sessionId: run.chatSessionId,
+      messageId,
       scheduleId: run.scheduleId,
       userId: run.userId,
+      status: run.status,
+      stage: run.stage,
+      triggerSource: run.triggerSource,
+      failureCategory: run.errorCategory,
+      failureCode: null,
+      failureMessage: run.errorMessage,
+      requestId: run.requestId,
+      durationMs,
+      toolExecutionCount,
+      retryCount: 0,
+      lastRepairAction: null,
       taskPromptSnapshot: run.taskPromptSnapshot,
       chatSessionId: run.chatSessionId,
+      scheduleTitle: run.schedule.title,
+      resultSummary: run.resultSummary,
       createdAt: run.createdAt.toISOString(),
-      triggerSource,
-      toolExecutionCount,
+      startedAt: run.startedAt?.toISOString() ?? null,
+      finishedAt: run.finishedAt?.toISOString() ?? null,
       schedule: {
         id: run.schedule.id,
         title: run.schedule.title,
         type: run.schedule.type
       }
-    };
-
-    if (run.status === 'PENDING') {
-      return {
-        ...summaryBase,
-        status: 'PENDING',
-        stage: 'QUEUED',
-        errorCategory: null,
-        durationMs: null,
-        resultSummary: null,
-        errorMessage: null,
-        startedAt: null,
-        finishedAt: null
-      };
-    }
-
-    if (!run.startedAt) {
-      throw new Error('Schedule run is missing startedAt');
-    }
-
-    if (run.status === 'RUNNING') {
-      return {
-        ...summaryBase,
-        status: 'RUNNING',
-        stage: run.stage && run.stage !== 'QUEUED' && run.stage !== 'COMPLETED' ? run.stage : 'AGENT',
-        errorCategory: null,
-        durationMs: null,
-        resultSummary: null,
-        errorMessage: null,
-        startedAt: run.startedAt.toISOString(),
-        finishedAt: null
-      };
-    }
-
-    if (!run.finishedAt) {
-      throw new Error('Schedule run is missing finishedAt');
-    }
-
-    if (run.status === 'SUCCEEDED') {
-      if (!run.resultSummary) {
-        throw new Error('Succeeded schedule run is missing resultSummary');
-      }
-
-      return {
-        ...summaryBase,
-        status: 'SUCCEEDED',
-        stage: 'COMPLETED',
-        errorCategory: null,
-        durationMs: run.finishedAt.getTime() - run.startedAt.getTime(),
-        resultSummary: run.resultSummary,
-        errorMessage: null,
-        startedAt: run.startedAt.toISOString(),
-        finishedAt: run.finishedAt.toISOString()
-      };
-    }
-
-    if (!run.errorMessage) {
-      throw new Error('Failed schedule run is missing errorMessage');
-    }
-
-    return {
-      ...summaryBase,
-      status: 'FAILED',
-      stage: run.stage && run.stage !== 'QUEUED' && run.stage !== 'COMPLETED' ? run.stage : 'PERSISTENCE',
-      errorCategory: run.errorCategory ?? 'INTERNAL_ERROR',
-      durationMs: run.finishedAt.getTime() - run.startedAt.getTime(),
-      resultSummary: null,
-      errorMessage: run.errorMessage,
-      startedAt: run.startedAt.toISOString(),
-      finishedAt: run.finishedAt.toISOString()
     };
   }
 
@@ -439,13 +487,37 @@ export class ScheduleService {
     nextRunAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
+    latestRunId?: string | null;
     latestRunStatus?: ScheduleRunStatus | null;
+    latestRunStage?:
+      | 'PREPARING'
+      | 'ROUTING'
+      | 'MODEL_CALLING'
+      | 'TOOL_RUNNING'
+      | 'REPAIRING'
+      | 'PERSISTING'
+      | 'FINALIZING'
+      | null;
+    latestRunStartedAt?: Date | null;
+    latestRunFinishedAt?: Date | null;
+    latestRequestId?: string | null;
+    latestSessionId?: string | null;
+    latestMessageId?: string | null;
+    latestToolExecutionCount?: number | null;
     latestFailureMessage?: string | null;
     latestResultSummary?: string | null;
   }) {
     return {
       ...schedule,
+      latestRunId: schedule.latestRunId ?? null,
       latestRunStatus: schedule.latestRunStatus ?? null,
+      latestRunStage: schedule.latestRunStage ?? null,
+      latestRunStartedAt: schedule.latestRunStartedAt ?? null,
+      latestRunFinishedAt: schedule.latestRunFinishedAt ?? null,
+      latestRequestId: schedule.latestRequestId ?? null,
+      latestSessionId: schedule.latestSessionId ?? null,
+      latestMessageId: schedule.latestMessageId ?? null,
+      latestToolExecutionCount: schedule.latestToolExecutionCount ?? 0,
       latestFailureMessage: schedule.latestFailureMessage ?? null,
       latestResultSummary: schedule.latestResultSummary ?? null
     };
@@ -463,7 +535,23 @@ export class ScheduleService {
     enabled: boolean;
     lastRunAt: Date | null;
     nextRunAt: Date | null;
+    latestRunId: string | null;
     latestRunStatus: ScheduleRunStatus | null;
+    latestRunStage:
+      | 'PREPARING'
+      | 'ROUTING'
+      | 'MODEL_CALLING'
+      | 'TOOL_RUNNING'
+      | 'REPAIRING'
+      | 'PERSISTING'
+      | 'FINALIZING'
+      | null;
+    latestRunStartedAt: Date | null;
+    latestRunFinishedAt: Date | null;
+    latestRequestId: string | null;
+    latestSessionId: string | null;
+    latestMessageId: string | null;
+    latestToolExecutionCount: number;
     latestFailureMessage: string | null;
     latestResultSummary: string | null;
     createdAt: Date;
@@ -486,7 +574,15 @@ export class ScheduleService {
         enabled: schedule.enabled,
         lastRunAt: schedule.lastRunAt,
         nextRunAt: schedule.nextRunAt,
+        latestRunId: schedule.latestRunId,
         latestRunStatus: schedule.latestRunStatus,
+        latestRunStage: schedule.latestRunStage,
+        latestRunStartedAt: schedule.latestRunStartedAt,
+        latestRunFinishedAt: schedule.latestRunFinishedAt,
+        latestRequestId: schedule.latestRequestId,
+        latestSessionId: schedule.latestSessionId,
+        latestMessageId: schedule.latestMessageId,
+        latestToolExecutionCount: schedule.latestToolExecutionCount,
         latestFailureMessage: schedule.latestFailureMessage,
         latestResultSummary: schedule.latestResultSummary,
         createdAt: schedule.createdAt,
@@ -511,7 +607,15 @@ export class ScheduleService {
         enabled: schedule.enabled,
         lastRunAt: schedule.lastRunAt,
         nextRunAt: schedule.nextRunAt,
+        latestRunId: schedule.latestRunId,
         latestRunStatus: schedule.latestRunStatus,
+        latestRunStage: schedule.latestRunStage,
+        latestRunStartedAt: schedule.latestRunStartedAt,
+        latestRunFinishedAt: schedule.latestRunFinishedAt,
+        latestRequestId: schedule.latestRequestId,
+        latestSessionId: schedule.latestSessionId,
+        latestMessageId: schedule.latestMessageId,
+        latestToolExecutionCount: schedule.latestToolExecutionCount,
         latestFailureMessage: schedule.latestFailureMessage,
         latestResultSummary: schedule.latestResultSummary,
         createdAt: schedule.createdAt,
@@ -535,7 +639,15 @@ export class ScheduleService {
       enabled: schedule.enabled,
       lastRunAt: schedule.lastRunAt,
       nextRunAt: schedule.nextRunAt,
+      latestRunId: schedule.latestRunId,
       latestRunStatus: schedule.latestRunStatus,
+      latestRunStage: schedule.latestRunStage,
+      latestRunStartedAt: schedule.latestRunStartedAt,
+      latestRunFinishedAt: schedule.latestRunFinishedAt,
+      latestRequestId: schedule.latestRequestId,
+      latestSessionId: schedule.latestSessionId,
+      latestMessageId: schedule.latestMessageId,
+      latestToolExecutionCount: schedule.latestToolExecutionCount,
       latestFailureMessage: schedule.latestFailureMessage,
       latestResultSummary: schedule.latestResultSummary,
       createdAt: schedule.createdAt,
