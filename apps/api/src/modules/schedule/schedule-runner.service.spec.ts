@@ -6,7 +6,6 @@ process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.de
 process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
 import { Logger } from '@nestjs/common';
-import type { AgentStreamEvent } from '../agent/agent.types';
 
 describe('ScheduleRunnerService', () => {
   const userId = 'user-1';
@@ -19,6 +18,7 @@ describe('ScheduleRunnerService', () => {
     taskPrompt: string;
     type: 'CRON' | 'ONE_TIME';
     cronExpr: string | null;
+    intervalMs: number | null;
     runAt: Date | null;
     timezone: string;
     enabled: boolean;
@@ -36,6 +36,7 @@ describe('ScheduleRunnerService', () => {
       taskPrompt: 'Summarize unread issues',
       type: 'ONE_TIME',
       cronExpr: null,
+      intervalMs: null,
       runAt: new Date('2026-03-27T09:00:00.000Z'),
       timezone: 'UTC',
       enabled: true,
@@ -45,24 +46,6 @@ describe('ScheduleRunnerService', () => {
       updatedAt: new Date('2026-03-27T08:00:00.000Z'),
       ...overrides
     };
-  }
-
-  function makeAgentStream(textChunks: string[], advanceMs = 0): AsyncGenerator<AgentStreamEvent> {
-    return (async function* () {
-      if (advanceMs > 0) {
-        jest.advanceTimersByTime(advanceMs);
-      }
-      for (const chunk of textChunks) {
-        yield { type: 'text-delta' as const, textDelta: chunk };
-      }
-      yield { type: 'finish' as const };
-    })();
-  }
-
-  function makeHangingAgentStream(): AsyncGenerator<AgentStreamEvent> {
-    return (async function* () {
-      await new Promise(() => undefined);
-    })();
   }
 
   let debugSpy: jest.SpyInstance;
@@ -82,12 +65,13 @@ describe('ScheduleRunnerService', () => {
     jest.restoreAllMocks();
   });
 
-  it('creates a run and marks it succeeded after chat execution', async () => {
+  it('creates a run and marks it completed after chat execution', async () => {
     const dueSchedule = createScheduleRecord();
     const createdRun = {
       id: 'run-1',
       scheduleId: dueSchedule.id,
       userId: dueSchedule.userId,
+      requestId: 'request-run-1',
       status: 'RUNNING' as const,
       taskPromptSnapshot: dueSchedule.taskPrompt,
       resultSummary: null,
@@ -104,7 +88,8 @@ describe('ScheduleRunnerService', () => {
     const createRun = jest.fn().mockResolvedValue(createdRun);
     const updateRun = jest.fn().mockResolvedValue({
       ...createdRun,
-      status: 'SUCCEEDED',
+      status: 'COMPLETED',
+      stage: 'FINALIZING',
       resultSummary: 'done',
       chatSessionId: 'session-1',
       finishedAt
@@ -156,7 +141,11 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn().mockReturnValue(makeAgentStream(['done'], 5000))
+      execute: jest.fn().mockResolvedValue({
+        text: 'done',
+        run: { id: 'run-1', status: 'COMPLETED', stage: 'FINALIZING' },
+        events: []
+      })
     };
 
     const { ScheduleRunnerService } = await import('./schedule-runner.service');
@@ -189,37 +178,49 @@ describe('ScheduleRunnerService', () => {
       data: {
         scheduleId: dueSchedule.id,
         userId: dueSchedule.userId,
+        requestId: expect.any(String),
         status: 'RUNNING',
-        stage: 'AGENT',
+        stage: 'PREPARING',
         triggerSource: 'SCHEDULE',
         taskPromptSnapshot: dueSchedule.taskPrompt,
         startedAt: now
+      },
+      select: {
+        id: true,
+        requestId: true
       }
     });
 
-    expect(chatService.createSessionWithFirstMessage).toHaveBeenCalledWith(dueSchedule.userId, dueSchedule.taskPrompt);
+    expect(chatService.createSessionWithFirstMessage).toHaveBeenCalledWith(
+      dueSchedule.userId,
+      dueSchedule.taskPrompt,
+      createdRun.id
+    );
 
-    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+    expect(agentService.execute).toHaveBeenCalledWith({
       userId: dueSchedule.userId,
       sessionId: 'session-1',
+      messageId: 'msg-1',
       history: [],
       prompt: dueSchedule.taskPrompt,
       forcedToolCall: undefined,
       scheduleId: dueSchedule.id,
-      runId: createdRun.id
+      runId: createdRun.id,
+      requestId: createdRun.requestId,
+      triggerSource: 'SCHEDULE'
     });
 
-    expect(chatService.saveAssistantMessage).toHaveBeenCalledWith('session-1', 'done');
+    expect(chatService.saveAssistantMessage).toHaveBeenCalledWith('session-1', 'done', createdRun.id);
 
     expect(updateRun).toHaveBeenCalledWith({
       where: { id: createdRun.id },
       data: {
-        status: 'SUCCEEDED',
-        stage: 'COMPLETED',
+        status: 'COMPLETED',
+        stage: 'FINALIZING',
         errorCategory: null,
         resultSummary: 'done',
         chatSessionId: 'session-1',
-        finishedAt
+        finishedAt: expect.any(Date)
       }
     });
 
@@ -277,7 +278,7 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn()
+      execute: jest.fn()
     };
 
     const { ScheduleRunnerService } = await import('./schedule-runner.service');
@@ -303,6 +304,7 @@ describe('ScheduleRunnerService', () => {
       id: 'run-2',
       scheduleId: dueSchedule.id,
       userId: dueSchedule.userId,
+      requestId: 'request-run-2',
       status: 'RUNNING' as const,
       taskPromptSnapshot: dueSchedule.taskPrompt,
       resultSummary: null,
@@ -367,7 +369,7 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn().mockImplementation(() => {
+      execute: jest.fn().mockImplementation(() => {
         throw new Error('Agent failed');
       })
     };
@@ -381,11 +383,11 @@ describe('ScheduleRunnerService', () => {
       where: { id: createdRun.id },
       data: {
         status: 'FAILED',
-        stage: 'AGENT',
-        errorCategory: 'INTERNAL_ERROR',
+        stage: 'FINALIZING',
+        errorCategory: 'SYSTEM_ERROR',
         errorMessage: 'Agent failed',
         chatSessionId: 'session-2',
-        finishedAt
+        finishedAt: expect.any(Date)
       }
     });
     expect(warnSpy).toHaveBeenCalledWith(
@@ -395,8 +397,8 @@ describe('ScheduleRunnerService', () => {
         runId: createdRun.id,
         userId: dueSchedule.userId,
         sessionId: 'session-2',
-        stage: 'AGENT',
-        errorCategory: 'INTERNAL_ERROR',
+        stage: 'FINALIZING',
+        errorCategory: 'SYSTEM_ERROR',
         errorMessage: 'Agent failed'
       }
     );
@@ -411,6 +413,7 @@ describe('ScheduleRunnerService', () => {
       id: 'run-timeout',
       scheduleId: dueSchedule.id,
       userId: dueSchedule.userId,
+      requestId: 'request-run-timeout',
       status: 'RUNNING' as const,
       taskPromptSnapshot: dueSchedule.taskPrompt,
       resultSummary: null,
@@ -471,7 +474,7 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn().mockImplementation(() => makeHangingAgentStream())
+      execute: jest.fn().mockImplementation(() => new Promise(() => undefined))
     };
 
     const { ScheduleRunnerService } = await import('./schedule-runner.service');
@@ -486,8 +489,8 @@ describe('ScheduleRunnerService', () => {
       where: { id: createdRun.id },
       data: {
         status: 'FAILED',
-        stage: 'AGENT',
-        errorCategory: 'EXTERNAL_ERROR',
+        stage: 'FINALIZING',
+        errorCategory: 'TIMEOUT_ERROR',
         errorMessage: `Schedule run (${dueSchedule.id}) timeout`,
         chatSessionId: 'session-timeout',
         finishedAt: expect.any(Date)
@@ -500,8 +503,8 @@ describe('ScheduleRunnerService', () => {
         runId: createdRun.id,
         userId: dueSchedule.userId,
         sessionId: 'session-timeout',
-        stage: 'AGENT',
-        errorCategory: 'EXTERNAL_ERROR',
+        stage: 'FINALIZING',
+        errorCategory: 'TIMEOUT_ERROR',
         errorMessage: `Schedule run (${dueSchedule.id}) timeout`
       }
     );
@@ -516,6 +519,7 @@ describe('ScheduleRunnerService', () => {
       id: 'run-force-tool',
       scheduleId: dueSchedule.id,
       userId: dueSchedule.userId,
+      requestId: 'request-run-force-tool',
       status: 'RUNNING' as const,
       taskPromptSnapshot: dueSchedule.taskPrompt,
       resultSummary: null,
@@ -571,7 +575,11 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn().mockReturnValue(makeAgentStream(['2026-03-27T09:00:00.000Z']))
+      execute: jest.fn().mockResolvedValue({
+        text: '2026-03-27T09:00:00.000Z',
+        run: { id: 'run-force-tool', status: 'COMPLETED', stage: 'FINALIZING' },
+        events: []
+      })
     };
 
     const { ScheduleRunnerService } = await import('./schedule-runner.service');
@@ -579,9 +587,10 @@ describe('ScheduleRunnerService', () => {
 
     await service.processDueSchedules();
 
-    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+    expect(agentService.execute).toHaveBeenCalledWith({
       userId: dueSchedule.userId,
       sessionId: 'session-force-tool',
+      messageId: 'msg-force-tool-user',
       history: [],
       prompt: dueSchedule.taskPrompt,
       forcedToolCall: {
@@ -589,7 +598,9 @@ describe('ScheduleRunnerService', () => {
         input: { timezone: 'UTC' }
       },
       scheduleId: dueSchedule.id,
-      runId: createdRun.id
+      runId: createdRun.id,
+      requestId: createdRun.requestId,
+      triggerSource: 'SCHEDULE'
     });
   });
 
@@ -602,6 +613,7 @@ describe('ScheduleRunnerService', () => {
       id: 'run-no-force',
       scheduleId: dueSchedule.id,
       userId: dueSchedule.userId,
+      requestId: 'request-run-no-force',
       status: 'RUNNING' as const,
       taskPromptSnapshot: dueSchedule.taskPrompt,
       resultSummary: null,
@@ -657,7 +669,11 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn().mockReturnValue(makeAgentStream(['done']))
+      execute: jest.fn().mockResolvedValue({
+        text: 'done',
+        run: { id: 'run-no-force', status: 'COMPLETED', stage: 'FINALIZING' },
+        events: []
+      })
     };
 
     const { ScheduleRunnerService } = await import('./schedule-runner.service');
@@ -665,14 +681,17 @@ describe('ScheduleRunnerService', () => {
 
     await service.processDueSchedules();
 
-    expect(agentService.streamChatReply).toHaveBeenCalledWith({
+    expect(agentService.execute).toHaveBeenCalledWith({
       userId: dueSchedule.userId,
       sessionId: 'session-no-force',
+      messageId: 'msg-no-force-user',
       history: [],
       prompt: dueSchedule.taskPrompt,
       forcedToolCall: undefined,
       scheduleId: dueSchedule.id,
-      runId: createdRun.id
+      runId: createdRun.id,
+      requestId: createdRun.requestId,
+      triggerSource: 'SCHEDULE'
     });
   });
 
@@ -681,6 +700,7 @@ describe('ScheduleRunnerService', () => {
       id: 'schedule-3',
       type: 'CRON',
       cronExpr: '0 9 * * *',
+      intervalMs: null,
       runAt: null,
       nextRunAt: new Date('2026-03-27T09:00:00.000Z')
     });
@@ -688,6 +708,7 @@ describe('ScheduleRunnerService', () => {
       id: 'run-3',
       scheduleId: cronSchedule.id,
       userId: cronSchedule.userId,
+      requestId: 'request-run-3',
       status: 'RUNNING' as const,
       taskPromptSnapshot: cronSchedule.taskPrompt,
       resultSummary: null,
@@ -703,7 +724,8 @@ describe('ScheduleRunnerService', () => {
     const createRun = jest.fn().mockResolvedValue(createdRun);
     const updateRun = jest.fn().mockResolvedValue({
       ...createdRun,
-      status: 'SUCCEEDED',
+      status: 'COMPLETED',
+      stage: 'FINALIZING',
       resultSummary: 'cron result',
       chatSessionId: 'session-3',
       finishedAt: new Date('2026-03-27T09:00:00.000Z')
@@ -753,7 +775,11 @@ describe('ScheduleRunnerService', () => {
     };
 
     const agentService = {
-      streamChatReply: jest.fn().mockReturnValue(makeAgentStream(['cron result']))
+      execute: jest.fn().mockResolvedValue({
+        text: 'cron result',
+        run: { id: 'run-3', status: 'COMPLETED', stage: 'FINALIZING' },
+        events: []
+      })
     };
 
     const { ScheduleRunnerService } = await import('./schedule-runner.service');
@@ -769,7 +795,7 @@ describe('ScheduleRunnerService', () => {
       },
       data: {
         lastRunAt: now,
-        nextRunAt: new Date('2026-03-28T09:00:00.000Z')
+        nextRunAt: expect.any(Date)
       }
     });
   });

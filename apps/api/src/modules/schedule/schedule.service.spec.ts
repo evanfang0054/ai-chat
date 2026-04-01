@@ -115,7 +115,15 @@ describe('schedule utils', () => {
         enabled: true,
         lastRunAt: new Date('2026-03-27T08:00:00.000Z'),
         nextRunAt: new Date('2026-03-28T09:00:00.000Z'),
+        latestRunId: 'run-1',
         latestRunStatus: 'FAILED',
+        latestRunStage: 'FINALIZING',
+        latestRunStartedAt: new Date('2026-03-27T08:00:00.000Z'),
+        latestRunFinishedAt: new Date('2026-03-27T08:02:00.000Z'),
+        latestRequestId: 'request-1',
+        latestSessionId: 'session-1',
+        latestMessageId: 'message-1',
+        latestToolExecutionCount: 2,
         latestFailureMessage: 'Agent failed',
         latestResultSummary: null,
         createdAt: new Date('2026-03-26T08:00:00.000Z'),
@@ -133,7 +141,15 @@ describe('schedule utils', () => {
       enabled: true,
       lastRunAt: '2026-03-27T08:00:00.000Z',
       nextRunAt: '2026-03-28T09:00:00.000Z',
+      latestRunId: 'run-1',
       latestRunStatus: 'FAILED',
+      latestRunStage: 'FINALIZING',
+      latestRunStartedAt: '2026-03-27T08:00:00.000Z',
+      latestRunFinishedAt: '2026-03-27T08:02:00.000Z',
+      latestRequestId: 'request-1',
+      latestSessionId: 'session-1',
+      latestMessageId: 'message-1',
+      latestToolExecutionCount: 2,
       latestFailureMessage: 'Agent failed',
       latestResultSummary: null,
       createdAt: '2026-03-26T08:00:00.000Z',
@@ -155,7 +171,15 @@ describe('schedule utils', () => {
         enabled: false,
         lastRunAt: null,
         nextRunAt: null,
+        latestRunId: null,
         latestRunStatus: null,
+        latestRunStage: null,
+        latestRunStartedAt: null,
+        latestRunFinishedAt: null,
+        latestRequestId: null,
+        latestSessionId: null,
+        latestMessageId: null,
+        latestToolExecutionCount: 0,
         latestFailureMessage: null,
         latestResultSummary: null,
         createdAt: new Date('2026-03-26T08:00:00.000Z'),
@@ -173,7 +197,15 @@ describe('schedule utils', () => {
       enabled: false,
       lastRunAt: null,
       nextRunAt: null,
+      latestRunId: null,
       latestRunStatus: null,
+      latestRunStage: null,
+      latestRunStartedAt: null,
+      latestRunFinishedAt: null,
+      latestRequestId: null,
+      latestSessionId: null,
+      latestMessageId: null,
+      latestToolExecutionCount: 0,
       latestFailureMessage: null,
       latestResultSummary: null,
       createdAt: '2026-03-26T08:00:00.000Z',
@@ -246,6 +278,17 @@ describe('ScheduleService', () => {
     enabled: boolean;
     lastRunAt: Date | null;
     nextRunAt: Date | null;
+    latestRunId?: string | null;
+    latestRunStatus?: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | null;
+    latestRunStage?: 'PREPARING' | 'ROUTING' | 'MODEL_CALLING' | 'TOOL_RUNNING' | 'REPAIRING' | 'PERSISTING' | 'FINALIZING' | null;
+    latestRunStartedAt?: Date | null;
+    latestRunFinishedAt?: Date | null;
+    latestRequestId?: string | null;
+    latestSessionId?: string | null;
+    latestMessageId?: string | null;
+    latestToolExecutionCount?: number | null;
+    latestFailureMessage?: string | null;
+    latestResultSummary?: string | null;
     createdAt: Date;
     updatedAt: Date;
   };
@@ -254,9 +297,10 @@ describe('ScheduleService', () => {
     id: string;
     scheduleId: string;
     userId: string;
-    status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
-    stage: 'QUEUED' | 'AGENT' | 'LLM' | 'TOOL' | 'PERSISTENCE' | 'COMPLETED';
-    errorCategory: 'USER_ERROR' | 'EXTERNAL_ERROR' | 'INTERNAL_ERROR' | null;
+    requestId: string | null;
+    status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+    stage: 'PREPARING' | 'ROUTING' | 'MODEL_CALLING' | 'TOOL_RUNNING' | 'REPAIRING' | 'PERSISTING' | 'FINALIZING';
+    errorCategory: 'INPUT_ERROR' | 'TOOL_ERROR' | 'MODEL_ERROR' | 'DEPENDENCY_ERROR' | 'TIMEOUT_ERROR' | 'SYSTEM_ERROR' | 'CANCELLED' | null;
     triggerSource: 'SCHEDULE' | 'MANUAL_RETRY';
     taskPromptSnapshot: string;
     resultSummary: string | null;
@@ -267,6 +311,11 @@ describe('ScheduleService', () => {
     createdAt: Date;
     chatSession: {
       toolExecutions: Array<{ id: string }>;
+      messages: Array<{
+        id: string;
+        runId: string | null;
+        createdAt: Date;
+      }>;
     } | null;
     schedule: {
       id: string;
@@ -289,6 +338,17 @@ describe('ScheduleService', () => {
       enabled: true,
       lastRunAt: null,
       nextRunAt: new Date('2026-03-28T09:00:00.000Z'),
+      latestRunId: null,
+      latestRunStatus: null,
+      latestRunStage: null,
+      latestRunStartedAt: null,
+      latestRunFinishedAt: null,
+      latestRequestId: null,
+      latestSessionId: null,
+      latestMessageId: null,
+      latestToolExecutionCount: 0,
+      latestFailureMessage: null,
+      latestResultSummary: null,
       createdAt: new Date('2026-03-27T08:00:00.000Z'),
       updatedAt: new Date('2026-03-27T08:00:00.000Z'),
       ...overrides
@@ -300,8 +360,9 @@ describe('ScheduleService', () => {
       id: 'run-1',
       scheduleId: 'schedule-1',
       userId,
-      status: 'SUCCEEDED',
-      stage: 'COMPLETED',
+      requestId: 'request-run-1',
+      status: 'COMPLETED',
+      stage: 'FINALIZING',
       errorCategory: null,
       triggerSource: 'SCHEDULE',
       taskPromptSnapshot: 'Summarize unread issues',
@@ -312,7 +373,14 @@ describe('ScheduleService', () => {
       finishedAt: new Date('2026-03-28T09:00:10.000Z'),
       createdAt: new Date('2026-03-28T09:00:00.000Z'),
       chatSession: {
-        toolExecutions: []
+        toolExecutions: [],
+        messages: [
+          {
+            id: 'message-1',
+            runId: 'run-1',
+            createdAt: new Date('2026-03-28T09:00:00.000Z')
+          }
+        ]
       },
       schedule: {
         id: 'schedule-1',
@@ -342,7 +410,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     const result = await service.createSchedule(userId, {
       title: 'Morning summary',
@@ -370,7 +438,20 @@ describe('ScheduleService', () => {
   });
 
   it('listSchedules returns summaries for the owner only', async () => {
-    const ownedSchedule = createScheduleRecord();
+    const ownedSchedule = createScheduleRecord({
+      lastRunAt: new Date('2026-03-28T09:00:10.000Z'),
+      latestRunId: 'run-1',
+      latestRunStatus: 'COMPLETED',
+      latestRunStage: 'FINALIZING',
+      latestRunStartedAt: new Date('2026-03-28T09:00:00.000Z'),
+      latestRunFinishedAt: new Date('2026-03-28T09:00:10.000Z'),
+      latestRequestId: 'request-run-1',
+      latestSessionId: 'chat-session-1',
+      latestMessageId: 'message-1',
+      latestToolExecutionCount: 2,
+      latestFailureMessage: null,
+      latestResultSummary: 'Done'
+    });
     const findMany = jest.fn().mockResolvedValue([ownedSchedule]);
     const prisma = {
       schedule: {
@@ -378,7 +459,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     const result = await service.listSchedules(userId, { enabled: true });
 
@@ -401,11 +482,19 @@ describe('ScheduleService', () => {
           runAt: '2026-03-28T09:00:00.000Z',
           timezone: 'UTC',
           enabled: true,
-          lastRunAt: null,
+          lastRunAt: '2026-03-28T09:00:10.000Z',
           nextRunAt: '2026-03-28T09:00:00.000Z',
-          latestRunStatus: null,
+          latestRunId: 'run-1',
+          latestRunStatus: 'COMPLETED',
+          latestRunStage: 'FINALIZING',
+          latestRunStartedAt: '2026-03-28T09:00:00.000Z',
+          latestRunFinishedAt: '2026-03-28T09:00:10.000Z',
+          latestRequestId: 'request-run-1',
+          latestSessionId: 'chat-session-1',
+          latestMessageId: 'message-1',
+          latestToolExecutionCount: 2,
           latestFailureMessage: null,
-          latestResultSummary: null,
+          latestResultSummary: 'Done',
           createdAt: '2026-03-27T08:00:00.000Z',
           updatedAt: '2026-03-27T08:00:00.000Z'
         }
@@ -421,7 +510,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(service.getScheduleOrThrow(userId, 'missing-schedule')).rejects.toBeInstanceOf(NotFoundException);
     expect(findFirst).toHaveBeenCalledWith({
@@ -453,7 +542,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await service.updateSchedule(userId, existing.id, {
       title: 'Evening summary',
@@ -501,7 +590,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     const result = await service.updateSchedule(userId, existing.id, {
       title: 'Evening summary',
@@ -553,7 +642,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await service.updateSchedule(userId, existing.id, {
       cronExpr: '0 18 * * *'
@@ -598,7 +687,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await service.updateSchedule(userId, existing.id, {
       runAt: '2026-03-29T10:00:00.000Z'
@@ -638,7 +727,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(
       service.updateSchedule(userId, existing.id, {
@@ -665,7 +754,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(
       service.updateSchedule(userId, existing.id, {
@@ -693,7 +782,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(
       service.updateSchedule(userId, existing.id, {
@@ -727,7 +816,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     const result = await service.enableSchedule(userId, existing.id);
 
@@ -760,7 +849,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     const result = await service.disableSchedule(userId, existing.id);
 
@@ -788,7 +877,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await service.deleteSchedule(userId, existing.id);
 
@@ -810,7 +899,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(service.deleteSchedule(userId, 'missing-schedule')).rejects.toBeInstanceOf(NotFoundException);
     expect(deleteSchedule).not.toHaveBeenCalled();
@@ -825,18 +914,18 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     const result = await service.listRuns(userId, {
       scheduleId: 'schedule-1',
-      status: 'SUCCEEDED'
+      status: 'COMPLETED'
     });
 
     expect(findMany).toHaveBeenCalledWith({
       where: {
         userId,
         scheduleId: 'schedule-1',
-        status: 'SUCCEEDED'
+        status: 'COMPLETED'
       },
       include: {
         schedule: true,
@@ -845,6 +934,19 @@ describe('ScheduleService', () => {
             toolExecutions: {
               select: {
                 id: true
+              }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
               }
             }
           }
@@ -856,18 +958,25 @@ describe('ScheduleService', () => {
       runs: [
         {
           id: 'run-1',
+          sessionId: 'chat-session-1',
+          messageId: 'message-1',
           scheduleId: 'schedule-1',
           userId,
-          status: 'SUCCEEDED',
-          stage: 'COMPLETED',
-          taskPromptSnapshot: 'Summarize unread issues',
-          errorCategory: null,
+          status: 'COMPLETED',
+          stage: 'FINALIZING',
           triggerSource: 'SCHEDULE',
+          failureCategory: null,
+          failureCode: null,
+          failureMessage: null,
+          requestId: 'request-run-1',
           durationMs: 10000,
           toolExecutionCount: 0,
-          resultSummary: 'Done',
-          errorMessage: null,
+          retryCount: 0,
+          lastRepairAction: null,
+          taskPromptSnapshot: 'Summarize unread issues',
           chatSessionId: 'chat-session-1',
+          scheduleTitle: 'Morning summary',
+          resultSummary: 'Done',
           startedAt: '2026-03-28T09:00:00.000Z',
           finishedAt: '2026-03-28T09:00:10.000Z',
           createdAt: '2026-03-28T09:00:00.000Z',
@@ -881,18 +990,25 @@ describe('ScheduleService', () => {
     });
   });
 
-  it('getRunOrThrow returns stage errorCategory triggerSource durationMs and toolExecutionCount', async () => {
+  it('getRunOrThrow returns stage failureCategory triggerSource durationMs and toolExecutionCount', async () => {
     const run = createRunRecord({
       status: 'FAILED',
-      stage: 'TOOL',
-      errorCategory: 'EXTERNAL_ERROR',
+      stage: 'TOOL_RUNNING',
+      errorCategory: 'DEPENDENCY_ERROR',
       triggerSource: 'SCHEDULE',
       resultSummary: null,
       errorMessage: 'Tool provider timed out',
       startedAt: new Date('2026-03-28T09:00:00.000Z'),
       finishedAt: new Date('2026-03-28T09:00:05.000Z'),
       chatSession: {
-        toolExecutions: [{ id: 'tool-1' }, { id: 'tool-2' }]
+        toolExecutions: [{ id: 'tool-1' }, { id: 'tool-2' }],
+        messages: [
+          {
+            id: 'message-1',
+            runId: 'run-1',
+            createdAt: new Date('2026-03-28T09:00:00.000Z')
+          }
+        ]
       }
     });
     const findFirst = jest.fn().mockResolvedValue(run);
@@ -902,13 +1018,13 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(service.getRunOrThrow(userId, 'run-1')).resolves.toMatchObject({
       id: 'run-1',
       status: 'FAILED',
-      stage: 'TOOL',
-      errorCategory: 'EXTERNAL_ERROR',
+      stage: 'TOOL_RUNNING',
+      failureCategory: 'DEPENDENCY_ERROR',
       triggerSource: 'SCHEDULE',
       durationMs: 5000,
       toolExecutionCount: 2
@@ -922,6 +1038,19 @@ describe('ScheduleService', () => {
             toolExecutions: {
               select: {
                 id: true
+              }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
               }
             }
           }
@@ -938,7 +1067,7 @@ describe('ScheduleService', () => {
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun: jest.fn() } as never);
 
     await expect(service.getRunOrThrow(otherUserId, 'missing-run')).rejects.toBeInstanceOf(NotFoundException);
     expect(findFirst).toHaveBeenCalledWith({
@@ -950,6 +1079,19 @@ describe('ScheduleService', () => {
             toolExecutions: {
               select: {
                 id: true
+              }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
               }
             }
           }
@@ -969,12 +1111,20 @@ describe('ScheduleService', () => {
         type: 'ONE_TIME'
       }
     });
+    const schedule = createScheduleRecord({
+      id: 'schedule-1',
+      userId,
+      title: 'Morning summary',
+      taskPrompt: 'Summarize unread issues',
+      type: 'ONE_TIME'
+    });
     const rerun = createRunRecord({
       id: 'run-2',
       scheduleId: 'schedule-1',
       userId,
+      requestId: 'request-run-1-retry-1711614600000',
       status: 'PENDING',
-      stage: 'QUEUED',
+      stage: 'PREPARING',
       triggerSource: 'MANUAL_RETRY',
       resultSummary: null,
       errorMessage: null,
@@ -991,21 +1141,27 @@ describe('ScheduleService', () => {
     });
     const findFirst = jest.fn().mockResolvedValue(run);
     const create = jest.fn().mockResolvedValue(rerun);
+    const findSchedule = jest.fn().mockResolvedValue(schedule);
+    const triggerRun = jest.fn().mockResolvedValue(undefined);
     const prisma = {
       scheduleRun: {
         findFirst,
         create
+      },
+      schedule: {
+        findFirst: findSchedule
       }
     };
 
-    const service = new ScheduleService(prisma as never);
+    const service = new ScheduleService(prisma as never, { triggerRun } as never);
 
     await expect(service.retryRun('run-1', userId)).resolves.toMatchObject({
       run: {
         id: 'run-2',
+        requestId: expect.stringMatching(/^request-run-1-retry-\d+$/),
         triggerSource: 'MANUAL_RETRY',
         status: 'PENDING',
-        stage: 'QUEUED'
+        stage: 'PREPARING'
       }
     });
     expect(findFirst).toHaveBeenCalledWith({
@@ -1018,17 +1174,34 @@ describe('ScheduleService', () => {
               select: {
                 id: true
               }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
+              }
             }
           }
         }
       }
     });
+    expect(findSchedule).toHaveBeenCalledWith({
+      where: { id: 'schedule-1', userId }
+    });
     expect(create).toHaveBeenCalledWith({
       data: {
         scheduleId: 'schedule-1',
         userId,
+        requestId: expect.stringMatching(/^request-run-1-retry-\d+$/),
         status: 'PENDING',
-        stage: 'QUEUED',
+        stage: 'PREPARING',
         triggerSource: 'MANUAL_RETRY',
         taskPromptSnapshot: 'Summarize unread issues'
       },
@@ -1040,10 +1213,44 @@ describe('ScheduleService', () => {
               select: {
                 id: true
               }
+            },
+            messages: {
+              where: {
+                runId: { not: null }
+              },
+              select: {
+                id: true,
+                runId: true,
+                createdAt: true
+              },
+              orderBy: {
+                createdAt: 'asc'
+              }
             }
           }
         }
       }
+    });
+    expect(triggerRun).toHaveBeenCalledWith({
+      schedule: {
+        id: 'schedule-1',
+        userId,
+        title: 'Morning summary',
+        taskPrompt: 'Summarize unread issues',
+        type: 'ONE_TIME',
+        cronExpr: null,
+        intervalMs: null,
+        runAt: new Date('2026-03-28T09:00:00.000Z'),
+        timezone: 'UTC',
+        enabled: true,
+        lastRunAt: null,
+        nextRunAt: new Date('2026-03-28T09:00:00.000Z')
+      },
+      run: {
+        id: 'run-2',
+        requestId: expect.stringMatching(/^request-run-1-retry-\d+$/)
+      },
+      triggerSource: 'MANUAL_RETRY'
     });
   });
 });

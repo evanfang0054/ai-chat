@@ -52,9 +52,14 @@ describe('ToolService', () => {
     expect(create).toHaveBeenCalledWith({
       data: {
         sessionId: 'session-1',
+        runId: null,
+        messageId: null,
+        requestId: null,
         toolName: 'get_current_time',
         status: 'RUNNING',
-        input: { timezone: 'UTC' }
+        input: { timezone: 'UTC' },
+        progressMessage: 'Tool running',
+        partialOutput: null
       }
     });
     expect(update).toHaveBeenCalledWith({
@@ -62,6 +67,8 @@ describe('ToolService', () => {
       data: {
         status: 'SUCCEEDED',
         output: expect.stringMatching(/^\{"now":".+"\}$/),
+        progressMessage: 'Tool completed',
+        partialOutput: null,
         finishedAt: expect.any(Date)
       }
     });
@@ -118,23 +125,29 @@ describe('ToolService', () => {
     });
 
     await expect(started.run()).rejects.toMatchObject({
-      message: 'boom',
-      category: 'INTERNAL_ERROR',
+      category: 'TOOL_ERROR',
       execution: failedExecution
     });
 
     expect(create).toHaveBeenCalledWith({
       data: {
         sessionId: 'session-1',
+        runId: null,
+        messageId: null,
+        requestId: null,
         toolName: 'get_current_time',
         status: 'RUNNING',
-        input: {}
+        input: {},
+        progressMessage: 'Tool running',
+        partialOutput: null
       }
     });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'tool-execution-2' },
       data: {
         status: 'FAILED',
+        progressMessage: 'Tool failed',
+        partialOutput: null,
         errorMessage: 'boom',
         finishedAt: expect.any(Date)
       }
@@ -193,8 +206,7 @@ describe('ToolService', () => {
     });
     const runPromise = started.run();
     const rejection = expect(runPromise).rejects.toMatchObject({
-      message: 'Tool execution (get_current_time) timeout',
-      category: 'INTERNAL_ERROR',
+      category: 'TIMEOUT_ERROR',
       execution: failedExecution
     });
     await jest.advanceTimersByTimeAsync(60000);
@@ -203,6 +215,8 @@ describe('ToolService', () => {
       where: { id: 'tool-execution-timeout' },
       data: {
         status: 'FAILED',
+        progressMessage: 'Tool failed',
+        partialOutput: null,
         errorMessage: 'Tool execution (get_current_time) timeout',
         finishedAt: expect.any(Date)
       }

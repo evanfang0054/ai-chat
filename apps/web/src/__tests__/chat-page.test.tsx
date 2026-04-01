@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RouterProvider } from 'react-router-dom';
 import type { UIMessage } from 'ai';
+import type { GetChatTimelineResponse, ToolExecutionSummary } from '@ai-chat/shared';
 import * as chatService from '../services/chat';
 import { router } from '../router';
 import { useAuthStore } from '../stores/auth-store';
@@ -14,7 +15,8 @@ const useChatMock = vi.hoisted(() => {
   return {
     appendCalls: [] as Array<{ message: UIMessage; options?: { body?: object } }>,
     appendError: null as Error | null,
-    nextMessages: [] as UIMessage[]
+    nextMessages: [] as UIMessage[],
+    unstableRuntimeHelpers: false
   };
 });
 
@@ -29,33 +31,61 @@ vi.mock('@ai-sdk/react', async () => {
     }) => {
       const [messages, setMessages] = React.useState<UIMessage[]>([]);
       const [status, setStatus] = React.useState<'ready' | 'submitted' | 'streaming' | 'error'>('ready');
+      const optionsRef = React.useRef(options);
+      const messagesRef = React.useRef(messages);
+
+      React.useEffect(() => {
+        optionsRef.current = options;
+      }, [options]);
+
+      React.useEffect(() => {
+        messagesRef.current = messages;
+      }, [messages]);
+
+      const appendImpl = async (message: UIMessage, requestOptions?: { body?: object }) => {
+        const preparedBody = optionsRef.current.experimental_prepareRequestBody?.({
+          messages: [...messagesRef.current, message],
+          requestBody: requestOptions?.body
+        });
+
+        useChatMock.appendCalls.push({
+          message,
+          options: preparedBody ? { ...requestOptions, body: preparedBody } : requestOptions
+        });
+        setStatus('submitted');
+
+        if (useChatMock.appendError) {
+          setStatus('error');
+          optionsRef.current.onError?.(useChatMock.appendError);
+          return;
+        }
+
+        setMessages(useChatMock.nextMessages);
+        setStatus('ready');
+        await optionsRef.current.onFinish?.();
+      };
+
+      const append = useChatMock.unstableRuntimeHelpers
+        ? appendImpl
+        : React.useCallback(async (message: UIMessage, requestOptions?: { body?: object }) => {
+            await appendImpl(message, requestOptions);
+          }, []);
+
+      const replaceMessagesImpl = (nextMessages: UIMessage[]) => {
+        setMessages(nextMessages);
+      };
+
+      const replaceMessages = useChatMock.unstableRuntimeHelpers
+        ? replaceMessagesImpl
+        : React.useCallback((nextMessages: UIMessage[]) => {
+            replaceMessagesImpl(nextMessages);
+          }, []);
 
       return {
         messages,
-        setMessages,
+        setMessages: replaceMessages,
         status,
-        append: async (message: UIMessage, requestOptions?: { body?: object }) => {
-          const preparedBody = options.experimental_prepareRequestBody?.({
-            messages: [...messages, message],
-            requestBody: requestOptions?.body
-          });
-
-          useChatMock.appendCalls.push({
-            message,
-            options: preparedBody ? { ...requestOptions, body: preparedBody } : requestOptions
-          });
-          setStatus('submitted');
-
-          if (useChatMock.appendError) {
-            setStatus('error');
-            options.onError?.(useChatMock.appendError);
-            return;
-          }
-
-          setMessages(useChatMock.nextMessages);
-          setStatus('ready');
-          await options.onFinish?.();
-        }
+        append
       };
     }
   };
@@ -88,32 +118,100 @@ function createSession(id: string, title: string) {
   };
 }
 
-function createTimeline(sessionId: string, content: string, assistantContent?: string) {
+function createTimeline(
+  sessionId: string,
+  content: string,
+  assistantContent?: string,
+  withToolExecution = false
+): GetChatTimelineResponse {
   const now = new Date().toISOString();
+  const userMessage = {
+    id: `msg-${sessionId}`,
+    sessionId,
+    runId: null,
+    role: 'USER' as const,
+    content,
+    createdAt: now
+  };
+  const assistantMessage = assistantContent
+    ? {
+        id: `msg-${sessionId}-assistant`,
+        sessionId,
+        runId: `run-${sessionId}`,
+        role: 'ASSISTANT' as const,
+        content: assistantContent,
+        createdAt: now
+      }
+    : null;
+
+  const toolExecutions: ToolExecutionSummary[] =
+    assistantMessage && withToolExecution
+      ? [
+          {
+            id: `tool-${sessionId}`,
+            sessionId,
+            runId: `run-${sessionId}`,
+            messageId: assistantMessage.id,
+            toolName: 'manage_schedule',
+            status: 'SUCCEEDED',
+            progressMessage: null,
+            input: JSON.stringify({ query: content }),
+            output: JSON.stringify({ summary: 'Created schedule' }),
+            partialOutput: null,
+            errorCategory: null,
+            errorMessage: null,
+            canRetry: false,
+            canCancel: false,
+            startedAt: now,
+            finishedAt: now
+          }
+        ]
+      : [];
 
   return {
     session: createSession(sessionId, sessionId === 'session-2' ? 'Session Two' : 'Session One'),
-    messages: [
+    run: assistantMessage
+      ? {
+          id: `run-${sessionId}`,
+          sessionId,
+          messageId: assistantMessage.id,
+          scheduleId: null,
+          status: 'COMPLETED' as const,
+          stage: 'FINALIZING' as const,
+          triggerSource: 'USER' as const,
+          failureCategory: null,
+          failureCode: null,
+          failureMessage: null,
+          startedAt: now,
+          finishedAt: now
+        }
+      : null,
+    messages: [userMessage, ...(assistantMessage ? [assistantMessage] : [])],
+    toolExecutions,
+    timeline: [
       {
-        id: `msg-${sessionId}`,
+        kind: 'message' as const,
+        id: `timeline-${userMessage.id}`,
         sessionId,
-        role: 'USER' as const,
-        content,
-        createdAt: now
+        runId: userMessage.runId,
+        messageId: userMessage.id,
+        createdAt: userMessage.createdAt,
+        message: userMessage
       },
-      ...(assistantContent
+      ...(assistantMessage
         ? [
             {
-              id: `msg-${sessionId}-assistant`,
+              kind: 'message' as const,
+              id: `timeline-${assistantMessage.id}`,
               sessionId,
-              role: 'ASSISTANT' as const,
-              content: assistantContent,
-              createdAt: now
+              runId: assistantMessage.runId,
+              messageId: assistantMessage.id,
+              createdAt: assistantMessage.createdAt,
+              message: assistantMessage
             }
           ]
         : [])
-    ],
-    toolExecutions: []
+    ]
   };
 }
 
@@ -134,6 +232,35 @@ function createUiMessages(userContent: string, assistantContent: string): UIMess
   ];
 }
 
+function createUiMessagesWithTool(userContent: string, assistantContent: string): UIMessage[] {
+  return [
+    {
+      id: 'msg-user',
+      role: 'user',
+      content: userContent,
+      parts: [{ type: 'text', text: userContent }]
+    },
+    {
+      id: 'msg-assistant',
+      role: 'assistant',
+      content: assistantContent,
+      parts: [
+        { type: 'text', text: assistantContent },
+        {
+          type: 'tool-invocation',
+          toolInvocation: {
+            state: 'result',
+            toolCallId: 'tool-1',
+            toolName: 'manage_schedule',
+            args: { query: userContent },
+            result: { summary: 'Created schedule' }
+          }
+        }
+      ]
+    }
+  ];
+}
+
 afterEach(async () => {
   cleanup();
   vi.restoreAllMocks();
@@ -142,6 +269,7 @@ afterEach(async () => {
   useChatMock.appendCalls = [];
   useChatMock.appendError = null;
   useChatMock.nextMessages = [];
+  useChatMock.unstableRuntimeHelpers = false;
   await router.navigate('/');
 });
 
@@ -174,8 +302,75 @@ describe('ChatPage', () => {
     expect(screen.getByRole('link', { name: 'Runs' })).toHaveAttribute('href', '/runs');
   });
 
-  it('submits with useChat and refreshes sessions after finish', async () => {
+  it('binds useChat runtime into the store and refreshes sessions after finish', async () => {
     signIn();
+    useChatMock.nextMessages = createUiMessages('Hello AI', 'Hi there');
+
+    vi.spyOn(chatService, 'listChatSessions')
+      .mockResolvedValueOnce({ sessions: [] })
+      .mockResolvedValueOnce({ sessions: [createSession('session-1', 'Hello AI')] });
+    vi.spyOn(chatService, 'getChatMessages').mockResolvedValue(createTimeline('session-1', 'Hello AI', 'Hi there'));
+
+    await router.navigate('/chat');
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
+
+    await screen.findByText('开始一个新的对话');
+    await waitFor(() => {
+      expect(useChatStore.getState().runtime.append).toEqual(expect.any(Function));
+      expect(useChatStore.getState().runtime.replaceMessages).toEqual(expect.any(Function));
+    });
+    await userEvent.type(screen.getByRole('textbox'), 'Hello AI');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Hi there')).toBeInTheDocument();
+    expect(useChatMock.appendCalls).toHaveLength(1);
+    expect(useChatMock.appendCalls[0]).toMatchObject({
+      message: {
+        role: 'user',
+        content: 'Hello AI'
+      },
+      options: {
+        body: {
+          content: 'Hello AI'
+        }
+      }
+    });
+    expect(await screen.findByRole('button', { name: 'Session One' })).toBeInTheDocument();
+  });
+
+  it('clears bound runtime exits when chat page unmounts', async () => {
+    signIn();
+    vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({ sessions: [] });
+
+    await router.navigate('/chat');
+    const view = render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
+
+    await screen.findByText('开始一个新的对话');
+    await waitFor(() => {
+      expect(useChatStore.getState().runtime.append).toEqual(expect.any(Function));
+      expect(useChatStore.getState().runtime.replaceMessages).toEqual(expect.any(Function));
+    });
+
+    view.unmount();
+
+    expect(useChatStore.getState().runtime).toEqual({
+      append: null,
+      replaceMessages: null,
+      status: 'ready'
+    });
+  });
+
+  it('does not clear runtime when useChat helpers change identity across renders', async () => {
+    signIn();
+    useChatMock.unstableRuntimeHelpers = true;
     useChatMock.nextMessages = createUiMessages('Hello AI', 'Hi there');
 
     vi.spyOn(chatService, 'listChatSessions')
@@ -195,19 +390,8 @@ describe('ChatPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('Hi there')).toBeInTheDocument();
-    expect(useChatMock.appendCalls).toHaveLength(1);
-    expect(useChatMock.appendCalls[0]).toMatchObject({
-      message: {
-        role: 'user',
-        content: 'Hello AI'
-      },
-      options: {
-        body: {
-          content: 'Hello AI'
-        }
-      }
-    });
-    expect(await screen.findByRole('button', { name: 'Session One' })).toBeInTheDocument();
+    expect(useChatStore.getState().runtime.append).toEqual(expect.any(Function));
+    expect(useChatStore.getState().runtime.replaceMessages).toEqual(expect.any(Function));
   });
 
   it('prepares a minimal request body for the stream endpoint', async () => {
@@ -235,7 +419,32 @@ describe('ChatPage', () => {
     });
   });
 
-  it('loads messages for requested session from query string', async () => {
+  it('renders tool invocation parts from projected chat messages', async () => {
+    signIn();
+    useChatMock.nextMessages = createUiMessagesWithTool('Create a schedule', 'Done');
+
+    vi.spyOn(chatService, 'listChatSessions')
+      .mockResolvedValueOnce({ sessions: [] })
+      .mockResolvedValueOnce({ sessions: [createSession('session-1', 'Create a schedule')] });
+    vi.spyOn(chatService, 'getChatMessages').mockResolvedValue(createTimeline('session-1', 'Create a schedule', 'Done', true));
+
+    await router.navigate('/chat');
+    render(
+      <ThemeProvider>
+        <RouterProvider router={router} />
+      </ThemeProvider>
+    );
+
+    await screen.findByText('开始一个新的对话');
+    await userEvent.type(screen.getByRole('textbox'), 'Create a schedule');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('manage_schedule')).toBeInTheDocument();
+    expect(screen.getByText('completed')).toBeInTheDocument();
+    expect(screen.getByText(/Created schedule/)).toBeInTheDocument();
+  });
+
+  it('loads requested session from search params', async () => {
     signIn();
 
     vi.spyOn(chatService, 'listChatSessions').mockResolvedValue({

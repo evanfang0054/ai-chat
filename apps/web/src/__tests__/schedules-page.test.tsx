@@ -8,6 +8,26 @@ import * as scheduleService from '../services/schedule';
 import { router } from '../router';
 import { useAuthStore } from '../stores/auth-store';
 import { ThemeProvider } from '../contexts/theme-context';
+import { ScheduleForm } from '../components/schedules/ScheduleForm';
+
+function toDatetimeLocalValue(iso: string) {
+  const date = new Date(iso);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function toIsoFromDatetimeLocal(value: string) {
+  const [datePart, timePart] = value.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hours, minutes] = timePart.split(':').map(Number);
+
+  return new Date(year, month - 1, day, hours, minutes).toISOString();
+}
 
 afterEach(async () => {
   cleanup();
@@ -17,6 +37,55 @@ afterEach(async () => {
 });
 
 describe('SchedulesPage', () => {
+  it('renders one-time schedule form with local datetime and preserves the instant on submit', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const runAt = '2026-03-30T09:30:00.000Z';
+
+    render(
+      <ScheduleForm
+        initial={{
+          id: 'schedule-1',
+          title: 'Existing schedule',
+          taskPrompt: 'Updated prompt',
+          type: 'ONE_TIME',
+          cronExpr: null,
+          intervalMs: null,
+          runAt,
+          timezone: 'UTC',
+          enabled: true,
+          lastRunAt: null,
+          nextRunAt: '2026-03-30T09:30:00.000Z',
+          latestRunId: null,
+          latestRunStatus: null,
+          latestRunStage: null,
+          latestRunStartedAt: null,
+          latestRunFinishedAt: null,
+          latestRequestId: null,
+          latestSessionId: null,
+          latestMessageId: null,
+          latestToolExecutionCount: 0,
+          latestFailureMessage: null,
+          latestResultSummary: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }}
+        onSubmit={onSubmit}
+      />
+    );
+
+    const runAtInput = screen.getByLabelText('Run At') as HTMLInputElement;
+    expect(runAtInput.value).toBe(toDatetimeLocalValue(runAt));
+
+    await userEvent.clear(runAtInput);
+    await userEvent.type(runAtInput, '2026-03-31T10:45');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ONE_TIME',
+      runAt: toIsoFromDatetimeLocal('2026-03-31T10:45')
+    }));
+  });
+
   it('redirects /schedules to /login when unauthenticated', async () => {
     await router.navigate('/schedules');
     render(
@@ -104,7 +173,15 @@ describe('SchedulesPage', () => {
           enabled: true,
           lastRunAt: '2026-03-28T09:00:05.000Z',
           nextRunAt: '2026-03-29T09:00:00.000Z',
-          latestRunStatus: 'FAILED',
+          latestRunId: 'run-1',
+          latestRunStatus: 'COMPLETED',
+          latestRunStage: 'FINALIZING',
+          latestRunStartedAt: '2026-03-28T09:00:00.000Z',
+          latestRunFinishedAt: '2026-03-28T09:00:05.000Z',
+          latestRequestId: 'request-1',
+          latestSessionId: 'session-1',
+          latestMessageId: 'message-1',
+          latestToolExecutionCount: 2,
           latestFailureMessage: 'Agent failed',
           latestResultSummary: 'Partial summary',
           createdAt: new Date().toISOString(),
@@ -121,7 +198,15 @@ describe('SchedulesPage', () => {
     );
 
     expect(await screen.findByText(/Next Run:/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Latest Status: Failed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Run: run-1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Status: Completed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Stage: Finalizing/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Request: request-1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Session: session-1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Message: message-1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Tools: 2/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Started: 2026-03-28T09:00:00.000Z/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Latest Finished: 2026-03-28T09:00:05.000Z/i)).toBeInTheDocument();
     expect(await screen.findByText(/Latest Failure:/i)).toBeInTheDocument();
     expect(await screen.findByText(/Latest Result:/i)).toBeInTheDocument();
     expect(await screen.findByText(/Agent failed/i)).toBeInTheDocument();
@@ -154,7 +239,15 @@ describe('SchedulesPage', () => {
           enabled: true,
           lastRunAt: null,
           nextRunAt: '2026-03-28T09:00:00.000Z',
+          latestRunId: null,
           latestRunStatus: null,
+          latestRunStage: null,
+          latestRunStartedAt: null,
+          latestRunFinishedAt: null,
+          latestRequestId: null,
+          latestSessionId: null,
+          latestMessageId: null,
+          latestToolExecutionCount: 0,
           latestFailureMessage: null,
           latestResultSummary: null,
           createdAt: new Date().toISOString(),
@@ -175,7 +268,15 @@ describe('SchedulesPage', () => {
       enabled: true,
       lastRunAt: null,
       nextRunAt: '2026-03-29T09:00:00.000Z',
+      latestRunId: null,
       latestRunStatus: null,
+      latestRunStage: null,
+      latestRunStartedAt: null,
+      latestRunFinishedAt: null,
+      latestRequestId: null,
+      latestSessionId: null,
+      latestMessageId: null,
+      latestToolExecutionCount: 0,
       latestFailureMessage: null,
       latestResultSummary: null,
       createdAt: new Date().toISOString(),
@@ -194,7 +295,15 @@ describe('SchedulesPage', () => {
       enabled: true,
       lastRunAt: null,
       nextRunAt: '2026-03-30T09:30:00.000Z',
+      latestRunId: null,
       latestRunStatus: null,
+      latestRunStage: null,
+      latestRunStartedAt: null,
+      latestRunFinishedAt: null,
+      latestRequestId: null,
+      latestSessionId: null,
+      latestMessageId: null,
+      latestToolExecutionCount: 0,
       latestFailureMessage: null,
       latestResultSummary: null,
       createdAt: new Date().toISOString(),
