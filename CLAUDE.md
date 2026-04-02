@@ -4,21 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-这是一个 `pnpm workspace + Turborepo` 的 monorepo，目标是构建 AI 聊天平台。
+这是一个 `pnpm workspace + Turborepo` monorepo，目标是构建以 **agent execution** 为中心的 AI chat platform。
 
-当前代码已经不只是“auth 骨架”。仓库现状是：
-- `apps/api`：NestJS API，已实现健康检查、用户注册/登录、JWT 鉴权、基础 RBAC、聊天会话/消息查询、`/chat/stream` 流式聊天接口、tool execution 持久化、schedule/runs 接口与自动 tick 执行
-- `apps/web`：React + Vite Web，已实现登录页、认证状态持久化、受保护路由、管理员路由、聊天页、会话侧栏、流式消息渲染、工具执行状态展示、Schedules / Runs 页面
-- `packages/shared`：前后端共享 auth / user / chat / tool / schedule 类型
-- `infra/compose.yaml`：本地 PostgreSQL / Redis 依赖
+当前仓库的主要 workspace：
+- `apps/api`：NestJS API。主线不是单一聊天接口，而是 `auth + chat + schedule` 三条业务线共享同一套 execution spine。
+- `apps/web`：React + Vite Web。主应用已接入 `/chat`、`/dashboard`、`/schedules`、`/runs`、`/settings`、`/admin`，聊天页围绕执行态、timeline 和 tool execution 展示。
+- `packages/shared`：前后端共享 auth / user / chat / tool / schedule 契约；这里不只是 DTO 层，也是 chat 与 schedule 共用的 execution contract 层。
+- `infra/compose.yaml`：本地 PostgreSQL / Redis 依赖。
 
-设计与实施文档在：
+优先看这些文档：
+- `README.md`
 - `PROJECT_PLAN.md`
-- `docs/superpowers/specs/2026-03-26-ai-chat-design.md`
-- `docs/superpowers/plans/2026-03-26-platform-bootstrap-auth.md`
-- `docs/superpowers/plans/2026-03-26-tool-mvp.md`
-- `docs/superpowers/specs/2026-03-27-schedule-mvp-design.md`
-- `docs/superpowers/plans/2026-03-27-schedule-mvp.md`
+- `docs/superpowers/specs/*.md`
+- `docs/superpowers/plans/*.md`
 
 ## 常用命令
 
@@ -41,6 +39,9 @@ pnpm --filter @ai-chat/api build
 pnpm --filter @ai-chat/api lint
 pnpm --filter @ai-chat/api test
 pnpm --filter @ai-chat/api test:e2e
+pnpm --filter @ai-chat/api db:generate
+pnpm --filter @ai-chat/api db:migrate
+pnpm --filter @ai-chat/api db:seed
 
 pnpm --filter @ai-chat/web dev
 pnpm --filter @ai-chat/web build
@@ -58,7 +59,7 @@ pnpm --filter @ai-chat/web test -- auth-store.test.ts
 pnpm --filter @ai-chat/web test -- chat-store.test.ts
 ```
 
-### 数据库相关
+### 数据库与本地依赖
 ```bash
 pnpm db:up
 pnpm db:down
@@ -95,7 +96,7 @@ pnpm --filter @ai-chat/api db:seed
 
 ## 当前架构要点
 
-### 1. API 是 auth + chat + schedule 三条主线拼起来的
+### 1. API 是 auth + chat + schedule 三条主线，但 chat 与 schedule 共用 execution spine
 `apps/api/src/app.module.ts` 当前接入：
 - `PrismaModule`
 - `QueueModule`
@@ -105,40 +106,64 @@ pnpm --filter @ai-chat/api db:seed
 - `ScheduleModule`
 - `HealthController`
 
-因此后端现状不是只有账号体系，还包含聊天与定时任务链路。新增能力时优先沿现有模块边界扩展，而不是重新搭一层大而全的抽象。
+后端现状不只是 auth/chat/schedule 并列模块，而是两条执行型链路：
+- 用户触发的 chat run
+- schedule 触发的 background run
 
-### 2. 聊天主链路是 chat -> agent -> llm/tool
-后端的聊天入口在 `apps/api/src/modules/chat/chat.controller.ts`：
+两者共享 `RunSummary`、stage、failure category、tool execution 等执行态契约。
+
+### 2. Chat 主链路已经是 controller -> service -> agent -> llm/tool -> persistence -> stream
+聊天入口仍在 `apps/api/src/modules/chat/chat.controller.ts`：
 - `GET /chat/sessions`
 - `GET /chat/sessions/:sessionId/messages`
 - `POST /chat/stream`
 
-其中 `/chat/stream` 会把 agent 执行过程转成 SSE 事件返回前端，包括：
-- `run_started`
-- `tool_started`
-- `tool_completed`
-- `tool_failed`
-- `text_delta`
-- `run_completed`
-- `run_failed`
+但 `/chat/stream` 已经不只是“回 SSE 文本”：
+- controller 先创建 / 复用 session 与 user message
+- `AgentService.execute(...)` 产出 run events
+- 事件同时写成运行态数据，并桥接到 `ai` data stream parts
+- assistant reply、run、tool execution 都会持久化
+- 前端最终消费的是同一条 execution stream
 
-继续追链路时，关键文件通常是：
+关键文件通常是：
 - `apps/api/src/modules/chat/chat.controller.ts`
 - `apps/api/src/modules/chat/chat.service.ts`
 - `apps/api/src/modules/agent/agent.service.ts`
 - `apps/api/src/modules/tool/*`
 - `apps/api/src/modules/llm/*`
+- `packages/shared/src/chat.ts`
+- `packages/shared/src/schedule.ts`
 
-### 3. tool execution 已经落库，不只是前端展示
-当前 tool 调用不是纯内存事件。后端会记录 tool execution，并通过 SSE 把状态回推给前端；前端聊天页会显示 tool 的运行中 / 成功 / 失败状态。
+### 3. 聊天协议已经升级为 timeline + run events，不只是 message 列表
+`packages/shared/src/chat.ts` 里，chat 相关共享契约除了 session/message 外，还包括：
+- `ChatTimelineEntry`
+- `ChatRunEvent`
+- `GetChatTimelineResponse`
 
-因此涉及 tool 改动时，通常要同时检查：
+其中 `ChatRunEvent` 已覆盖：
+- `run_started`
+- `run_stage_changed`
+- `text_delta`
+- `tool_started`
+- `tool_progressed`
+- `tool_completed`
+- `tool_failed`
+- `run_repaired`
+- `run_completed`
+- `run_failed`
+
+因此修改聊天协议时，优先沿主链路直接收敛，不要额外维护长期适配层。
+
+### 4. tool execution 已经是执行主链路的一部分，不只是前端展示
+当前 tool 调用不是纯内存事件。后端会记录 tool execution，并通过流式事件把状态推给前端；前端聊天页会显示 tool 的运行中 / 成功 / 失败状态。
+
+涉及 tool 改动时，通常要同时检查：
 - agent 层是否发出正确事件
 - tool service 是否正确落库
 - shared 类型是否同步更新
-- web store 与聊天页是否正确消费事件
+- web store 与聊天页是否正确消费 execution 事件
 
-### 4. Schedule 主链路是 DB 真相源，不是 BullMQ 真相源
+### 5. Schedule 主链路仍以 DB 为真相源，BullMQ 只负责 tick 与唤醒
 Schedule 的核心业务仍在数据库：
 - `ScheduleService` 负责 CRUD、enable / disable、`nextRunAt` 维护
 - `ScheduleRunnerService.processDueSchedules(now)` 负责扫描 due schedules、claim、创建 `ScheduleRun`、调用 chat/agent 执行，并在 one-time 场景下回写 `enabled=false`
@@ -148,33 +173,37 @@ Schedule 的核心业务仍在数据库：
 
 不要把 BullMQ 当作每个 schedule 的独立真相源，也不要在 processor 里复制业务调度逻辑。
 
-### 5. 多实例联调时，schedule tick 会共享同一个 Redis 队列
-这是这个仓库里很容易再踩一次的坑：
-- 如果本地同时跑着两套 API（例如 `3000` 和 `3100`），并且两套都连同一个 `REDIS_URL`
-- 且两套都启用了 schedule tick
-- 那么任意实例都可能抢到同一个 schedule 的执行权
+### 6. Run / diagnostics 已经是 schedule 与 chat 之间的共享执行语言
+`packages/shared/src/schedule.ts` 不只描述 schedule CRUD，还定义了：
+- `RunSummary`
+- `RunDiagnosticsSummary`
+- `RunStage`
+- `FailureCategory`
+- `RunTriggerSource`
+- `ScheduleRunSummary`
 
-实际影响：
-- 你可能在 `3100` 上创建了 schedule，但执行发生在旧的 `3000` 实例里
-- 于是会出现“创建请求打到新环境，但 run 结果像是旧环境配置”的假象，例如错用旧的 LLM key / base URL
+这意味着：
+- chat run 与 schedule run 已经共享状态模型
+- 排查问题时要优先看 run 的 stage / failure category，而不是只看最终成功失败
+- 新增执行能力时，优先扩展共享 run 契约，而不是在某个模块单独发明一套状态字段
 
-联调 schedule / runs / LLM 时，先确认：
-- 当前只有一个 API 实例在消费 tick；或
-- 不同实例至少使用隔离的 Redis / queue 配置
+### 7. Web 聊天页的状态中心是 execution state，不是组件局部 state
+前端聊天主页面在 `apps/web/src/pages/chat/ChatPage.tsx`，核心状态集中在 `apps/web/src/stores/chat-store.ts`。
 
-排查顺序优先是：
-1. 确认 Web 实际命中的 API 地址
-2. 确认有哪些 API 端口仍在存活
-3. 确认哪些实例启用了 tick 并连接了同一个 Redis
-4. 再怀疑 `.env`、LLM key、模型配置
+现在 store 不只管理消息列表，还管理：
+- `sessions`
+- `currentSessionId`
+- `messages`
+- `currentRun`
+- `toolExecutions`
+- `runtime.status`
+- `streamUiState`
+- `streamErrorMessage`
 
-### 6. Web 聊天页的状态中心在 Zustand，不在组件局部 state
-前端聊天主页面在 `apps/web/src/pages/chat/ChatPage.tsx`，聊天流状态集中在 `apps/web/src/stores/chat-store.ts`。
-
-关键点：
-- 会话列表、当前会话、消息、toolExecutions、streaming 状态都在 store
-- `ChatPage` 负责订阅 SSE 并把事件分发给 store
-- `MessageList` / `ToolExecutionList` 只负责展示，不承担流式状态拼装
+关键边界：
+- `ChatPage` 负责订阅和桥接流式执行过程
+- store 负责归并 timeline / run / tool execution / streaming 状态
+- 展示组件只负责渲染，不承担执行态拼装
 
 如果你修改聊天行为，优先检查：
 - `apps/web/src/pages/chat/ChatPage.tsx`
@@ -182,7 +211,7 @@ Schedule 的核心业务仍在数据库：
 - `apps/web/src/services/chat.ts`
 - `apps/web/src/components/chat/*`
 
-### 7. 认证链路仍是前后端基础设施
+### 8. 认证链路仍是前后端基础设施，设置页已并入主应用路由
 后端认证入口在 `apps/api/src/modules/auth/auth.controller.ts`：
 - `POST /auth/register`
 - `POST /auth/login`
@@ -190,27 +219,22 @@ Schedule 的核心业务仍在数据库：
 
 前端认证状态在 `apps/web/src/stores/auth-store.ts`，使用 Zustand `persist` 持久化。
 
-如果你修改登录流程，需要同时检查：
-- API 返回结构是否与 `packages/shared` 一致
-- 前端 auth store 是否同步更新
-- 路由守卫是否仍成立
-- 登录页和后续页面跳转是否受影响
-
-### 8. 路由保护分为登录态与角色两层，schedule/runs 已接入主应用路由
 `apps/web/src/router/index.tsx` 当前结构是：
 - `/login`：登录页
 - `/chat`：登录后默认主入口
 - `/dashboard`：登录态页面
 - `/schedules`：登录态页面
 - `/runs`：登录态页面
+- `/settings`：登录态页面
 - `/admin`：额外要求 `ADMIN` 角色
 
 权限相关改动通常会同时影响：
 - 后端 JWT / roles guard
 - 前端 `ProtectedRoute` / `RoleRoute`
 - `packages/shared` 里的角色定义
+- 登录后跳转与主应用导航
 
-### 9. shared package 是前后端契约层
+### 9. shared package 是前后端契约层，也是 execution contract 层
 `packages/shared/src/index.ts` 当前统一导出：
 - `auth`
 - `user`
@@ -218,10 +242,10 @@ Schedule 的核心业务仍在数据库：
 - `tool`
 - `schedule`
 
-凡是前后端都要消费的 DTO、会话/消息摘要、tool execution、schedule / run 类型，应优先放到 `packages/shared`，避免两端各自维护重复定义。
+凡是前后端都要消费的 DTO、timeline、run summary、tool execution、schedule / run 类型，应优先放到 `packages/shared`，避免两端各自维护重复定义。
 
 ### 10. 文档里的目标边界可以参考，但以当前代码为准
-设计文档已经明确未来方向，如 `schedule`、`run`、`audit` 等模块。但当前真实运行状态仍以代码实现为准。
+设计文档已经明确未来方向，但当前真实运行状态仍以代码实现为准。
 
 回答“现在系统怎么工作”时：以代码为准。
 规划“下一步该怎么扩展”时：再参考 `docs/superpowers/specs` 和 `docs/superpowers/plans`。
@@ -230,15 +254,15 @@ Schedule 的核心业务仍在数据库：
 
 ### API
 - 当前数据访问主入口是 Prisma
+- 聊天与 schedule 的执行态已经共用 run 模型；不要在局部链路再发明一套状态命名
 - 涉及持久化时优先沿 Prisma 层扩展
-- 聊天联调通常需要先确认数据库已 migrate/seed
 - 如果要验证 tool execution 是否真实成功，优先检查接口流事件和数据库记录，而不只看前端文案
 - 如果要验证 schedule 真正执行在哪个实例上，除了看 `/runs` 页面，还要同时看 API 日志和存活端口
 
 ### Web
 - 当前是纯客户端应用，认证态是客户端持久化状态
 - 新增页面时优先沿现有 `pages/ + router/ + services/ + stores/ + components/` 分层
-- 聊天页空态、流式 assistant 文本、tool execution 展示是三套不同 UI 状态，改动时不要混淆
+- 聊天页不要把 message、run、tool execution、runtime status 混成一种状态
 - Schedule / Runs 联调时，先确认 `VITE_API_BASE_URL`，不要默认认为页面一定连到 `3000`
 
 ### Monorepo / Turbo
@@ -281,6 +305,9 @@ Schedule 的核心业务仍在数据库：
 
 - 遵循 KISS，优先简单直接的实现
 - 不要为了未来假设提前做复杂抽象
+- 优先沿现有模块边界扩展，而不是重新搭一层平台抽象
+- 聊天协议升级时直接收敛主链路，避免长期维护协议映射层
+- tool 参数校验优先依赖 schema，而不是重复手写一套参数校验
 - 不要把 README 风格的通用说明堆进代码注释
 - 涉及 GitHub 操作时，优先使用 `gh`
 - 涉及敏感信息时，仅使用本地环境变量，不要写入仓库
