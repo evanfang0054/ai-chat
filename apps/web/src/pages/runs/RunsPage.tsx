@@ -7,6 +7,11 @@ import { RunList } from '../../components/runs/RunList';
 import { useAuthStore } from '../../stores/auth-store';
 import { getRun, listRuns, retryRun } from '../../services/schedule';
 
+const fieldLabelClassName = 'block text-sm font-medium text-[rgb(var(--foreground))]';
+const nativeSelectClassName =
+  'mt-1 w-full rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2 text-sm text-[rgb(var(--foreground))] outline-none transition-colors focus-visible:border-[rgb(var(--border-active))] focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-focus))]';
+const fieldHintClassName = 'text-sm text-[rgb(var(--foreground-secondary))]';
+
 const runStatusLabel: Record<string, string> = {
   PENDING: 'Pending',
   RUNNING: 'Running',
@@ -26,7 +31,7 @@ function RunDiagnosticsCard(props: {
   const { run } = props;
 
   return (
-    <div className="space-y-2 text-sm">
+    <div className="space-y-2 text-sm text-[rgb(var(--foreground))]">
       <div>Run ID: {run.id}</div>
       <div>Schedule ID: {run.scheduleId}</div>
       <div>Chat Session ID: {run.chatSessionId ?? '—'}</div>
@@ -37,7 +42,7 @@ function RunDiagnosticsCard(props: {
       {run.toolExecutions?.length ? (
         <div>
           <div>Tools:</div>
-          <ul className="mt-1 space-y-1 text-slate-300">
+          <ul className="mt-1 space-y-1 text-[rgb(var(--foreground-secondary))]">
             {run.toolExecutions.map((tool) => (
               <li key={tool.id}>
                 {tool.toolName} · {tool.status}
@@ -51,7 +56,9 @@ function RunDiagnosticsCard(props: {
       <div>Started: {run.startedAt ?? '—'}</div>
       <div>Finished: {run.finishedAt ?? '—'}</div>
       <div>Result: {run.resultSummary ?? '—'}</div>
-      <div className={run.errorMessage ? 'text-rose-300' : 'text-slate-100'}>Error: {run.errorMessage ?? '—'}</div>
+      <div className={run.errorMessage ? 'text-[rgb(var(--error))]' : 'text-[rgb(var(--foreground))]'}>
+        Error: {run.errorMessage ?? '—'}
+      </div>
     </div>
   );
 }
@@ -151,13 +158,13 @@ export function RunsPage() {
       </Card>
 
       <Card className="mb-4 space-y-3 p-4">
-        <h2 className="text-base font-semibold">Filters</h2>
+        <h2 className="text-base font-semibold text-[rgb(var(--foreground))]">Filters</h2>
         <div className="flex flex-wrap gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-200">
+            <label className={fieldLabelClassName}>
               Status
               <select
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                className={nativeSelectClassName}
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value)}
               >
@@ -170,7 +177,7 @@ export function RunsPage() {
             </label>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-200">
+            <label className={fieldLabelClassName}>
               Schedule ID
               <Input
                 className="mt-1"
@@ -186,7 +193,7 @@ export function RunsPage() {
 
       <Card className="p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-base font-semibold">Run Details</h2>
+          <h2 className="text-base font-semibold text-[rgb(var(--foreground))]">Run Details</h2>
           <Button
             type="button"
             variant="secondary"
@@ -196,11 +203,11 @@ export function RunsPage() {
             Retry Run
           </Button>
         </div>
-        <p className="mb-3 text-xs text-[rgb(var(--foreground-secondary))]">
+        <p className={fieldHintClassName}>
           Tick may be consumed by another API instance if Redis is shared.
         </p>
         {!selectedRun ? (
-          <p className="text-sm text-slate-300">Select a run to inspect.</p>
+          <p className="text-sm text-[rgb(var(--foreground-secondary))]">Select a run to inspect.</p>
         ) : (
           <RunDiagnosticsCard run={selectedRun} />
         )}
