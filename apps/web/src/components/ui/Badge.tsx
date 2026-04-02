@@ -1,23 +1,26 @@
-import type { HTMLAttributes } from 'react';
+import * as React from 'react';
+import { cva, type VariantProps } from 'class-variance-authority';
 
-type BadgeVariant = 'neutral' | 'success' | 'warning' | 'error';
+import { cn } from '../../lib/utils';
 
-type BadgeProps = HTMLAttributes<HTMLSpanElement> & {
-  variant?: BadgeVariant;
-};
+const badgeVariants = cva('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors', {
+  variants: {
+    variant: {
+      neutral: 'border border-[rgb(var(--border))] bg-[rgb(var(--surface-muted))] text-[rgb(var(--foreground-secondary))]',
+      success: 'border border-[rgb(var(--success)/0.2)] bg-[rgb(var(--success)/0.1)] text-[rgb(var(--success))]',
+      warning: 'border border-[rgb(var(--warning)/0.2)] bg-[rgb(var(--warning)/0.1)] text-[rgb(var(--warning))]',
+      error: 'border border-[rgb(var(--error)/0.2)] bg-[rgb(var(--error)/0.1)] text-[rgb(var(--error))]'
+    }
+  },
+  defaultVariants: {
+    variant: 'neutral'
+  }
+});
 
-const variantClassName: Record<BadgeVariant, string> = {
-  neutral: 'bg-[rgb(var(--surface-muted))] text-[rgb(var(--foreground-secondary))] border border-[rgb(var(--border))]',
-  success: 'bg-[rgb(var(--success)/0.1)] text-[rgb(var(--success))] border border-[rgb(var(--success)/0.2)]',
-  warning: 'bg-[rgb(var(--warning)/0.1)] text-[rgb(var(--warning))] border border-[rgb(var(--warning)/0.2)]',
-  error: 'bg-[rgb(var(--error)/0.1)] text-[rgb(var(--error))] border border-[rgb(var(--error)/0.2)]'
-};
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
 
-export function Badge({ className = '', variant = 'neutral', ...props }: BadgeProps) {
-  return (
-    <span
-      {...props}
-      className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ${variantClassName[variant]} ${className}`.trim()}
-    />
-  );
+export function Badge({ className, variant, ...props }: BadgeProps) {
+  return <span data-variant={variant ?? 'neutral'} className={cn(badgeVariants({ variant }), className)} {...props} />;
 }
+
+export { badgeVariants };
