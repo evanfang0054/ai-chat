@@ -1,15 +1,14 @@
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import type { RunSummary, ToolExecutionSummary } from '@ai-chat/shared';
 import { parseDataStreamPart } from 'ai';
 import request from 'supertest';
 
 type ParsedStreamPart = ReturnType<typeof parseDataStreamPart>;
-
-const createStream = async function* (...events: Array<Record<string, unknown>>) {
-  for (const event of events) {
-    yield event;
-  }
-};
+type AgentExecute = jest.MockedFunction<(
+  request: Record<string, unknown>,
+  onEvent?: (event: Record<string, unknown>) => void
+) => Promise<{ text: string; run: RunSummary; events: Array<Record<string, unknown>> }>>;
 
 const parseStreamParts = (responseText: string): ParsedStreamPart[] =>
   responseText
@@ -21,12 +20,50 @@ const parseStreamParts = (responseText: string): ParsedStreamPart[] =>
 const getDataParts = (parts: ParsedStreamPart[]) =>
   parts.filter((part): part is Extract<ParsedStreamPart, { type: 'data' }> => part.type === 'data');
 
+jest.setTimeout(30000);
+
+const createRunSummary = (overrides?: Partial<RunSummary>): RunSummary => ({
+  id: 'run-1',
+  sessionId: 'pending-session-id',
+  messageId: 'assistant-run-1',
+  scheduleId: null,
+  status: 'COMPLETED',
+  stage: 'FINALIZING',
+  triggerSource: 'USER',
+  failureCategory: null,
+  failureCode: null,
+  failureMessage: null,
+  startedAt: null,
+  finishedAt: null,
+  ...overrides
+});
+
+const createToolExecution = (overrides?: Partial<ToolExecutionSummary>): ToolExecutionSummary => ({
+  id: 'tool-execution-1',
+  sessionId: 'pending-session-id',
+  runId: 'run-1',
+  messageId: 'assistant-run-1',
+  toolName: 'get_current_time',
+  status: 'RUNNING',
+  progressMessage: null,
+  input: '{"timezone":"UTC"}',
+  output: null,
+  partialOutput: null,
+  errorCategory: null,
+  errorMessage: null,
+  canRetry: false,
+  canCancel: true,
+  startedAt: '2026-03-26T12:00:00.000Z',
+  finishedAt: null,
+  ...overrides
+});
+
 describe('ChatController (e2e)', () => {
   let app: INestApplication;
   let prisma: any;
   let shouldFailAgent = false;
-  const agentService = {
-    streamChatReply: jest.fn()
+  const agentService: { execute: AgentExecute } = {
+    execute: jest.fn() as AgentExecute
   };
 
   beforeAll(async () => {
@@ -61,7 +98,7 @@ describe('ChatController (e2e)', () => {
   });
 
   beforeEach(async () => {
-    agentService.streamChatReply.mockReset();
+    agentService.execute.mockReset();
     shouldFailAgent = false;
     await prisma.chatMessage.deleteMany();
     await prisma.chatSession.deleteMany();
@@ -218,55 +255,72 @@ describe('ChatController (e2e)', () => {
   });
 
   it('POST /chat/stream creates a session, streams tool and assistant output, and saves messages', async () => {
-    agentService.streamChatReply.mockImplementation(() =>
-      createStream(
-        {
-          type: 'tool-input-start',
-          toolExecution: {
-            id: 'tool-execution-1',
-            sessionId: 'pending-session-id',
-            toolName: 'get_current_time',
-            status: 'RUNNING',
-            input: '{"timezone":"UTC"}',
-            output: null,
-            errorMessage: null,
-            startedAt: '2026-03-26T12:00:00.000Z',
-            finishedAt: null
-          }
-        },
-        {
-          type: 'tool-input-available',
-          toolExecution: {
-            id: 'tool-execution-1',
-            sessionId: 'pending-session-id',
-            toolName: 'get_current_time',
-            status: 'RUNNING',
-            input: '{"timezone":"UTC"}',
-            output: null,
-            errorMessage: null,
-            startedAt: '2026-03-26T12:00:00.000Z',
-            finishedAt: null
-          }
-        },
-        {
-          type: 'tool-output-available',
-          toolExecution: {
-            id: 'tool-execution-1',
-            sessionId: 'pending-session-id',
-            toolName: 'get_current_time',
-            status: 'SUCCEEDED',
-            input: '{"timezone":"UTC"}',
-            output: '{"now":"2026-03-26T12:00:00.000Z"}',
-            errorMessage: null,
-            startedAt: '2026-03-26T12:00:00.000Z',
-            finishedAt: '2026-03-26T12:00:01.000Z'
-          }
-        },
-        { type: 'text-delta', textDelta: 'Hello' },
-        { type: 'text-delta', textDelta: ' world' },
-        { type: 'finish' }
-      )
-    );
+    agentService.execute.mockImplementation(async (request, onEvent) => {
+      onEvent?.({
+        type: 'run_stage_changed',
+        run: createRunSummary({
+          id: request.runId as string,
+          sessionId: request.sessionId as string,
+          messageId: request.messageId as string,
+          status: 'RUNNING',
+          stage: 'MODEL_CALLING'
+        })
+      });
+      onEvent?.({
+        type: 'tool_started',
+        toolExecution: createToolExecution({
+          id: 'tool-execution-1',
+          sessionId: request.sessionId as string,
+          runId: request.runId as string,
+          messageId: request.messageId as string
+        })
+      });
+      onEvent?.({
+        type: 'tool_progressed',
+        toolExecution: createToolExecution({
+          id: 'tool-execution-1',
+          sessionId: request.sessionId as string,
+          runId: request.runId as string,
+          messageId: request.messageId as string,
+          progressMessage: 'Looking up UTC time'
+        })
+      });
+      onEvent?.({
+        type: 'tool_completed',
+        toolExecution: createToolExecution({
+          id: 'tool-execution-1',
+          sessionId: request.sessionId as string,
+          runId: request.runId as string,
+          messageId: request.messageId as string,
+          status: 'SUCCEEDED',
+          output: '{"now":"2026-03-26T12:00:00.000Z"}',
+          canCancel: false,
+          finishedAt: '2026-03-26T12:00:01.000Z'
+        })
+      });
+      onEvent?.({
+        type: 'text_delta',
+        runId: request.runId as string,
+        messageId: request.messageId as string,
+        textDelta: 'Hello'
+      });
+      onEvent?.({
+        type: 'text_delta',
+        runId: request.runId as string,
+        messageId: request.messageId as string,
+        textDelta: ' world'
+      });
+
+      return {
+        text: 'Hello world',
+        run: createRunSummary({
+          id: request.runId as string,
+          sessionId: request.sessionId as string,
+          messageId: request.messageId as string
+        }),
+        events: []
+      };
+    });
 
     const user = await request(app.getHttpServer())
       .post('/auth/register')
@@ -285,12 +339,19 @@ describe('ChatController (e2e)', () => {
 
     expect(parts).toEqual([
       expect.objectContaining({
+        type: 'start_step',
+        value: { messageId: expect.any(String) }
+      }),
+      expect.objectContaining({
         type: 'data',
         value: [
           expect.objectContaining({
-            type: 'session-start',
-            sessionId: expect.any(String),
-            userMessageId: expect.any(String),
+            type: 'run_started',
+            run: expect.objectContaining({
+              status: 'RUNNING',
+              stage: 'PREPARING',
+              triggerSource: 'USER'
+            }),
             session: expect.objectContaining({
               title: 'Tell me something nice',
               model: 'deepseek-chat'
@@ -303,24 +364,28 @@ describe('ChatController (e2e)', () => {
         ]
       }),
       expect.objectContaining({
-        type: 'start_step',
-        value: { messageId: expect.any(String) }
+        type: 'data',
+        value: [
+          expect.objectContaining({
+            type: 'run_stage_changed',
+            run: expect.objectContaining({
+              status: 'RUNNING',
+              stage: 'MODEL_CALLING'
+            })
+          })
+        ]
       }),
       expect.objectContaining({
         type: 'data',
         value: [
           expect.objectContaining({
-            type: 'tool-input-start',
-            toolCallId: 'tool-execution-1',
-            toolName: 'get_current_time',
+            type: 'tool_started',
             toolExecution: expect.objectContaining({
               id: 'tool-execution-1',
               toolName: 'get_current_time',
               status: 'RUNNING',
               input: '{"timezone":"UTC"}',
               output: null,
-              errorMessage: null,
-              finishedAt: null,
               sessionId: expect.any(String)
             })
           })
@@ -338,18 +403,35 @@ describe('ChatController (e2e)', () => {
         type: 'data',
         value: [
           expect.objectContaining({
-            type: 'tool-input-available',
-            toolCallId: 'tool-execution-1',
-            toolName: 'get_current_time',
-            input: '{"timezone":"UTC"}',
+            type: 'tool_progressed',
             toolExecution: expect.objectContaining({
               id: 'tool-execution-1',
               toolName: 'get_current_time',
               status: 'RUNNING',
-              input: '{"timezone":"UTC"}',
-              output: null,
-              errorMessage: null,
-              finishedAt: null,
+              progressMessage: 'Looking up UTC time',
+              sessionId: expect.any(String)
+            })
+          })
+        ]
+      }),
+      expect.objectContaining({
+        type: 'tool_call',
+        value: {
+          toolCallId: 'tool-execution-1',
+          toolName: 'get_current_time',
+          args: { timezone: 'UTC' }
+        }
+      }),
+      expect.objectContaining({
+        type: 'data',
+        value: [
+          expect.objectContaining({
+            type: 'tool_completed',
+            toolExecution: expect.objectContaining({
+              id: 'tool-execution-1',
+              toolName: 'get_current_time',
+              status: 'SUCCEEDED',
+              output: '{"now":"2026-03-26T12:00:00.000Z"}',
               sessionId: expect.any(String)
             })
           })
@@ -366,25 +448,38 @@ describe('ChatController (e2e)', () => {
         type: 'data',
         value: [
           expect.objectContaining({
-            type: 'tool-output-available',
-            toolCallId: 'tool-execution-1',
-            toolName: 'get_current_time',
-            output: '{"now":"2026-03-26T12:00:00.000Z"}',
-            toolExecution: expect.objectContaining({
-              id: 'tool-execution-1',
-              toolName: 'get_current_time',
-              status: 'SUCCEEDED',
-              input: '{"timezone":"UTC"}',
-              output: '{"now":"2026-03-26T12:00:00.000Z"}',
-              errorMessage: null,
-              finishedAt: '2026-03-26T12:00:01.000Z',
-              sessionId: expect.any(String)
-            })
+            type: 'text_delta',
+            textDelta: 'Hello'
           })
         ]
       }),
       expect.objectContaining({ type: 'text', value: 'Hello' }),
+      expect.objectContaining({
+        type: 'data',
+        value: [
+          expect.objectContaining({
+            type: 'text_delta',
+            textDelta: ' world'
+          })
+        ]
+      }),
       expect.objectContaining({ type: 'text', value: ' world' }),
+      expect.objectContaining({
+        type: 'data',
+        value: [
+          expect.objectContaining({
+            type: 'run_completed',
+            run: expect.objectContaining({
+              status: 'COMPLETED',
+              stage: 'FINALIZING'
+            }),
+            message: expect.objectContaining({
+              role: 'ASSISTANT',
+              content: 'Hello world'
+            })
+          })
+        ]
+      }),
       expect.objectContaining({
         type: 'finish_step',
         value: {
@@ -397,42 +492,31 @@ describe('ChatController (e2e)', () => {
         value: {
           finishReason: 'stop'
         }
-      }),
-      expect.objectContaining({
-        type: 'data',
-        value: [
-          expect.objectContaining({
-            type: 'session-finish',
-            sessionId: expect.any(String),
-            assistantMessageId: expect.any(String),
-            session: expect.objectContaining({
-              title: 'Tell me something nice'
-            }),
-            message: expect.objectContaining({
-              role: 'ASSISTANT',
-              content: 'Hello world'
-            })
-          })
-        ]
       })
     ]);
 
-    const sessionStart = dataParts[0].value[0] as Record<string, any>;
-    const toolStart = dataParts[1].value[0] as Record<string, any>;
-    const toolAvailable = dataParts[2].value[0] as Record<string, any>;
-    const toolOutput = dataParts[3].value[0] as Record<string, any>;
-    const sessionFinish = dataParts[4].value[0] as Record<string, any>;
+    const runStarted = dataParts[0].value[0] as Record<string, any>;
+    const toolStarted = dataParts[2].value[0] as Record<string, any>;
+    const toolProgressed = dataParts[3].value[0] as Record<string, any>;
+    const toolCompleted = dataParts[4].value[0] as Record<string, any>;
+    const runCompleted = dataParts[7].value[0] as Record<string, any>;
 
-    expect(toolStart.toolExecution.sessionId).toBe(sessionStart.session.id);
-    expect(toolAvailable.toolExecution.sessionId).toBe(sessionStart.session.id);
-    expect(toolOutput.toolExecution.sessionId).toBe(sessionStart.session.id);
-    expect(sessionFinish.sessionId).toBe(sessionStart.session.id);
-    expect(agentService.streamChatReply).toHaveBeenCalledWith({
-      userId: user.body.user.id,
-      sessionId: sessionStart.session.id,
-      history: [],
-      prompt: 'Tell me something nice'
-    });
+    expect(toolStarted.toolExecution.sessionId).toBe(runStarted.session.id);
+    expect(toolProgressed.toolExecution.sessionId).toBe(runStarted.session.id);
+    expect(toolCompleted.toolExecution.sessionId).toBe(runStarted.session.id);
+    expect(runCompleted.run.sessionId).toBe(runStarted.session.id);
+    expect(agentService.execute).toHaveBeenCalledWith(
+      {
+        userId: user.body.user.id,
+        sessionId: runStarted.session.id,
+        messageId: expect.any(String),
+        runId: expect.any(String),
+        triggerSource: 'USER',
+        history: [],
+        prompt: 'Tell me something nice'
+      },
+      expect.any(Function)
+    );
 
     const sessions = await prisma.chatSession.findMany({
       where: { userId: user.body.user.id },
@@ -452,39 +536,33 @@ describe('ChatController (e2e)', () => {
   });
 
   it('POST /chat/stream emits tool failure data and does not persist assistant on agent failure', async () => {
-    agentService.streamChatReply.mockImplementation(async function* () {
+    agentService.execute.mockImplementation(async (request, onEvent) => {
       if (shouldFailAgent) {
-        yield {
-          type: 'tool-input-start' as const,
-          toolExecution: {
+        onEvent?.({
+          type: 'tool_started',
+          toolExecution: createToolExecution({
             id: 'tool-execution-2',
-            sessionId: 'pending-session-id',
-            toolName: 'get_current_time',
-            status: 'RUNNING' as const,
-            input: '{"timezone":"UTC"}',
-            output: null,
-            errorMessage: null,
-            startedAt: '2026-03-26T12:05:00.000Z',
-            finishedAt: null
-          }
-        };
-        yield {
-          type: 'tool-output-error' as const,
-          toolExecution: {
-            id: 'tool-execution-2',
-            sessionId: 'pending-session-id',
-            toolName: 'get_current_time',
-            status: 'FAILED' as const,
-            input: '{"timezone":"UTC"}',
-            output: null,
-            errorMessage: 'Tool execution failed',
-            startedAt: '2026-03-26T12:05:00.000Z',
-            finishedAt: '2026-03-26T12:05:01.000Z'
-          }
-        };
+            sessionId: request.sessionId as string,
+            runId: request.runId as string,
+            messageId: request.messageId as string
+          })
+        });
+        throw new Error('Tool execution failed');
       }
 
-      yield { type: 'finish' as const };
+      return {
+        text: '',
+        run: createRunSummary({
+          id: request.runId as string,
+          sessionId: request.sessionId as string,
+          messageId: request.messageId as string,
+          status: 'FAILED',
+          stage: 'FINALIZING',
+          failureCategory: 'SYSTEM_ERROR',
+          failureMessage: 'Tool execution failed'
+        }),
+        events: []
+      };
     });
     shouldFailAgent = true;
 
@@ -505,16 +583,6 @@ describe('ChatController (e2e)', () => {
 
     expect(parts).toEqual([
       expect.objectContaining({
-        type: 'data',
-        value: [
-          expect.objectContaining({
-            type: 'session-start',
-            session: expect.objectContaining({ title: 'Trigger failure' }),
-            message: expect.objectContaining({ role: 'USER', content: 'Trigger failure' })
-          })
-        ]
-      }),
-      expect.objectContaining({
         type: 'start_step',
         value: { messageId: expect.any(String) }
       }),
@@ -522,9 +590,17 @@ describe('ChatController (e2e)', () => {
         type: 'data',
         value: [
           expect.objectContaining({
-            type: 'tool-input-start',
-            toolCallId: 'tool-execution-2',
-            toolName: 'get_current_time',
+            type: 'run_started',
+            session: expect.objectContaining({ title: 'Trigger failure' }),
+            message: expect.objectContaining({ role: 'USER', content: 'Trigger failure' })
+          })
+        ]
+      }),
+      expect.objectContaining({
+        type: 'data',
+        value: [
+          expect.objectContaining({
+            type: 'tool_started',
             toolExecution: expect.objectContaining({
               id: 'tool-execution-2',
               status: 'RUNNING',
@@ -535,19 +611,23 @@ describe('ChatController (e2e)', () => {
         ]
       }),
       expect.objectContaining({
+        type: 'tool_call',
+        value: {
+          toolCallId: 'tool-execution-2',
+          toolName: 'get_current_time',
+          args: { timezone: 'UTC' }
+        }
+      }),
+      expect.objectContaining({
         type: 'data',
         value: [
           expect.objectContaining({
-            type: 'tool-output-error',
-            toolCallId: 'tool-execution-2',
-            toolName: 'get_current_time',
-            errorText: 'Tool execution failed',
-            toolExecution: expect.objectContaining({
-              id: 'tool-execution-2',
+            type: 'run_failed',
+            run: expect.objectContaining({
               status: 'FAILED',
-              errorMessage: 'Tool execution failed',
-              finishedAt: '2026-03-26T12:05:01.000Z',
-              sessionId: expect.any(String)
+              stage: 'FINALIZING',
+              failureCategory: 'SYSTEM_ERROR',
+              failureMessage: 'Tool execution failed'
             })
           })
         ]
@@ -558,12 +638,12 @@ describe('ChatController (e2e)', () => {
       })
     ]);
 
-    const sessionStart = dataParts[0].value[0] as Record<string, any>;
-    const toolStart = dataParts[1].value[0] as Record<string, any>;
-    const toolError = dataParts[2].value[0] as Record<string, any>;
+    const runStarted = dataParts[0].value[0] as Record<string, any>;
+    const toolStarted = dataParts[1].value[0] as Record<string, any>;
+    const runFailed = dataParts[2].value[0] as Record<string, any>;
 
-    expect(toolStart.toolExecution.sessionId).toBe(sessionStart.session.id);
-    expect(toolError.toolExecution.sessionId).toBe(sessionStart.session.id);
+    expect(toolStarted.toolExecution.sessionId).toBe(runStarted.session.id);
+    expect(runFailed.run.sessionId).toBe(runStarted.session.id);
 
     const session = await prisma.chatSession.findFirstOrThrow({
       where: { userId: user.body.user.id }
@@ -579,13 +659,30 @@ describe('ChatController (e2e)', () => {
   });
 
   it('POST /chat/stream appends to an existing session and keeps prior history', async () => {
-    agentService.streamChatReply.mockImplementation(() =>
-      createStream(
-        { type: 'text-delta', textDelta: 'Second' },
-        { type: 'text-delta', textDelta: ' reply' },
-        { type: 'finish' }
-      )
-    );
+    agentService.execute.mockImplementation(async (request, onEvent) => {
+      onEvent?.({
+        type: 'text_delta',
+        runId: request.runId as string,
+        messageId: request.messageId as string,
+        textDelta: 'Second'
+      });
+      onEvent?.({
+        type: 'text_delta',
+        runId: request.runId as string,
+        messageId: request.messageId as string,
+        textDelta: ' reply'
+      });
+
+      return {
+        text: 'Second reply',
+        run: createRunSummary({
+          id: request.runId as string,
+          sessionId: request.sessionId as string,
+          messageId: request.messageId as string
+        }),
+        events: []
+      };
+    });
 
     const user = await request(app.getHttpServer())
       .post('/auth/register')
@@ -628,52 +725,66 @@ describe('ChatController (e2e)', () => {
     const dataParts = getDataParts(parts);
 
     expect(parts[0]).toMatchObject({
+      type: 'start_step',
+      value: { messageId: expect.any(String) }
+    });
+    expect(parts[1]).toMatchObject({
       type: 'data',
       value: [
         expect.objectContaining({
-          type: 'session-start',
+          type: 'run_started',
           session: expect.objectContaining({ id: 'existing-session', title: 'Existing session', model: 'deepseek-chat' }),
           message: expect.objectContaining({ role: 'USER', content: 'Second question' })
         })
       ]
     });
-    expect(parts[1]).toMatchObject({
-      type: 'start_step',
-      value: { messageId: expect.any(String) }
+    expect(parts[2]).toMatchObject({
+      type: 'data',
+      value: [expect.objectContaining({ type: 'text_delta', textDelta: 'Second' })]
     });
-    expect(parts[2]).toMatchObject({ type: 'text', value: 'Second' });
-    expect(parts[3]).toMatchObject({ type: 'text', value: ' reply' });
+    expect(parts[3]).toMatchObject({ type: 'text', value: 'Second' });
     expect(parts[4]).toMatchObject({
-      type: 'finish_step',
-      value: { isContinued: false, finishReason: 'stop' }
+      type: 'data',
+      value: [expect.objectContaining({ type: 'text_delta', textDelta: ' reply' })]
     });
-    expect(parts[5]).toMatchObject({
-      type: 'finish_message',
-      value: { finishReason: 'stop' }
-    });
+    expect(parts[5]).toMatchObject({ type: 'text', value: ' reply' });
     expect(parts[6]).toMatchObject({
       type: 'data',
       value: [
         expect.objectContaining({
-          type: 'session-finish',
-          sessionId: 'existing-session',
+          type: 'run_completed',
+          run: expect.objectContaining({ sessionId: 'existing-session' }),
           message: expect.objectContaining({ role: 'ASSISTANT', content: 'Second reply' })
         })
       ]
     });
-
-    const sessionStart = dataParts[0].value[0] as Record<string, any>;
-    expect(sessionStart.session.id).toBe('existing-session');
-
-    expect(agentService.streamChatReply).toHaveBeenCalledWith({
-      userId: user.body.user.id,
-      sessionId: 'existing-session',
-      history: [
-        { role: 'USER', content: 'First question' },
-        { role: 'ASSISTANT', content: 'First answer' }
-      ],
-      prompt: 'Second question'
+    expect(parts[7]).toMatchObject({
+      type: 'finish_step',
+      value: { isContinued: false, finishReason: 'stop' }
     });
+    expect(parts[8]).toMatchObject({
+      type: 'finish_message',
+      value: { finishReason: 'stop' }
+    });
+
+    const runStarted = dataParts[0].value[0] as Record<string, any>;
+    expect(runStarted.session.id).toBe('existing-session');
+
+    expect(agentService.execute).toHaveBeenCalledWith(
+      {
+        userId: user.body.user.id,
+        sessionId: 'existing-session',
+        messageId: expect.any(String),
+        runId: expect.any(String),
+        triggerSource: 'USER',
+        history: [
+          { role: 'USER', content: 'First question' },
+          { role: 'ASSISTANT', content: 'First answer' }
+        ],
+        prompt: 'Second question'
+      },
+      expect.any(Function)
+    );
 
     const messages = await prisma.chatMessage.findMany({
       where: { sessionId: 'existing-session' },

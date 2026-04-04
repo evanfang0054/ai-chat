@@ -5,6 +5,7 @@ process.env.DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || 'test-key';
 process.env.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
 process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
+import { AIMessageChunk } from '@langchain/core/messages';
 import type { AgentLoopEvent } from './agent.types';
 
 describe('AgentService', () => {
@@ -18,14 +19,34 @@ describe('AgentService', () => {
     process.env.DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
   });
 
+  async function* createChunkStream(...chunks: AIMessageChunk[]) {
+    for (const chunk of chunks) {
+      yield chunk;
+    }
+  }
+
+  function createTextChunk(content: string) {
+    return new AIMessageChunk({ content });
+  }
+
+  function createToolChunk(options: { content?: string; tool_calls?: unknown[]; additional_kwargs?: Record<string, unknown> }) {
+    return new AIMessageChunk({
+      content: options.content ?? '',
+      tool_calls: options.tool_calls as never,
+      additional_kwargs: options.additional_kwargs as never
+    });
+  }
+
   async function createService(options?: {
-    invoke?: jest.Mock;
+    stream?: jest.Mock;
     listDefinitions?: Array<{ name: string; description: string }>;
     getDefinition?: jest.Mock;
     startToolExecution?: jest.Mock;
   }) {
-    const invoke = options?.invoke ?? jest.fn().mockResolvedValue({ content: 'Hello world', tool_calls: [] });
-    const bindTools = jest.fn().mockReturnValue({ invoke });
+    const stream =
+      options?.stream ??
+      jest.fn().mockReturnValue(createChunkStream(createTextChunk('Hello'), createTextChunk(' world')));
+    const bindTools = jest.fn().mockReturnValue({ stream });
     const llmService = {
       createChatModel: jest.fn().mockReturnValue({ bindTools })
     };
@@ -38,11 +59,37 @@ describe('AgentService', () => {
     const { AgentService } = await import('./agent.service');
     const service = new AgentService(llmService as never, toolService as never);
 
-    return { service, llmService, toolService, bindTools, invoke };
+    return { service, llmService, toolService, bindTools, stream };
   }
 
+  it('streams text deltas chunk by chunk and returns the aggregated assistant text', async () => {
+    const { service, stream } = await createService();
+    const events: AgentLoopEvent[] = [];
+
+    const result = await service.execute(
+      {
+        userId: 'user-1',
+        sessionId: 'session-1',
+        triggerSource: 'USER',
+        history: [],
+        prompt: 'Say hello'
+      },
+      (event) => events.push(event)
+    );
+
+    expect(stream).toHaveBeenCalled();
+    expect(result.text).toBe('Hello world');
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'RUNNING', stage: 'PREPARING' }) }),
+      expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'RUNNING', stage: 'MODEL_CALLING' }) }),
+      expect.objectContaining({ type: 'text_delta', textDelta: 'Hello' }),
+      expect.objectContaining({ type: 'text_delta', textDelta: ' world' }),
+      expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'COMPLETED', stage: 'FINALIZING' }) })
+    ]);
+  });
+
   it('converts chat history into LangChain messages and emits text deltas', async () => {
-    const { service, llmService, toolService, bindTools, invoke } = await createService();
+    const { service, llmService, toolService, bindTools, stream } = await createService();
     const events: AgentLoopEvent[] = [];
 
     const result = await service.execute(
@@ -63,7 +110,7 @@ describe('AgentService', () => {
     expect(llmService.createChatModel).toHaveBeenCalled();
     expect(bindTools).toHaveBeenCalled();
     expect(toolService.startToolExecution).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledWith([
+    expect(stream).toHaveBeenCalledWith([
       expect.objectContaining({ content: expect.stringContaining('If the user asks you to perform an action') }),
       expect.objectContaining({ content: 'You are helpful.' }),
       expect.objectContaining({ content: 'Hi' }),
@@ -74,14 +121,15 @@ describe('AgentService', () => {
     expect(events).toEqual([
       expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'RUNNING', stage: 'PREPARING' }) }),
       expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'RUNNING', stage: 'MODEL_CALLING' }) }),
-      expect.objectContaining({ type: 'text_delta', textDelta: 'Hello world', runId: expect.any(String), messageId: 'assistant-session-1' }),
+      expect.objectContaining({ type: 'text_delta', textDelta: 'Hello', runId: expect.any(String), messageId: 'assistant-session-1' }),
+      expect.objectContaining({ type: 'text_delta', textDelta: ' world', runId: expect.any(String), messageId: 'assistant-session-1' }),
       expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'COMPLETED', stage: 'FINALIZING' }) })
     ]);
   });
 
   it('guides the model to infer structured schedule arguments for natural-language schedule requests', async () => {
-    const { service, bindTools, invoke } = await createService({
-      invoke: jest.fn().mockResolvedValue({ content: 'ok', tool_calls: [] }),
+    const { service, bindTools, stream } = await createService({
+      stream: jest.fn().mockReturnValue(createChunkStream(createTextChunk('ok'))),
       listDefinitions: [{ name: 'manage_schedule', description: 'Create, list, update, enable, or disable schedules.' }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } })
     });
@@ -95,7 +143,7 @@ describe('AgentService', () => {
     });
 
     expect(bindTools).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ tool_choice: 'auto' }));
-    expect(invoke).toHaveBeenCalledWith(
+    expect(stream).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining('translate phrases like "every 10 seconds"') }),
         expect.objectContaining({ content: expect.stringContaining('create a short title instead of asking for one') })
@@ -104,8 +152,8 @@ describe('AgentService', () => {
   });
 
   it('requires explicit confirmation before deleting a schedule', async () => {
-    const { service, invoke, toolService } = await createService({
-      invoke: jest.fn().mockResolvedValue({ content: 'Please confirm which schedule to delete.', tool_calls: [] }),
+    const { service, stream, toolService } = await createService({
+      stream: jest.fn().mockReturnValue(createChunkStream(createTextChunk('Please confirm which schedule to delete.'))),
       listDefinitions: [{ name: 'manage_schedule', description: "Manage the current user's schedules." }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } })
     });
@@ -118,7 +166,7 @@ describe('AgentService', () => {
       prompt: 'Delete my daily summary schedule.'
     });
 
-    expect(invoke).toHaveBeenCalledWith(
+    expect(stream).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining('require an explicit user confirmation in natural language') })
       ])
@@ -127,8 +175,8 @@ describe('AgentService', () => {
   });
 
   it('guides the model to list or disambiguate ambiguous schedule targets before mutation', async () => {
-    const { service, invoke, toolService } = await createService({
-      invoke: jest.fn().mockResolvedValue({ content: 'I found multiple matching schedules.', tool_calls: [] }),
+    const { service, stream, toolService } = await createService({
+      stream: jest.fn().mockReturnValue(createChunkStream(createTextChunk('I found multiple matching schedules.'))),
       listDefinitions: [{ name: 'manage_schedule', description: "Manage the current user's schedules." }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } })
     });
@@ -141,7 +189,7 @@ describe('AgentService', () => {
       prompt: 'Disable my report schedule.'
     });
 
-    expect(invoke).toHaveBeenCalledWith(
+    expect(stream).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
           content: expect.stringContaining('prefer calling manage_schedule with action="list" first or ask a disambiguation question instead of guessing')
@@ -154,7 +202,7 @@ describe('AgentService', () => {
   it('fails the run when LLM invocation times out', async () => {
     jest.useFakeTimers();
     const { service } = await createService({
-      invoke: jest.fn().mockImplementation(() => new Promise(() => undefined))
+      stream: jest.fn().mockReturnValue(new Promise(() => undefined) as never)
     });
     const events: AgentLoopEvent[] = [];
 
@@ -210,16 +258,19 @@ describe('AgentService', () => {
       errorMessage: 'Tool execution failed',
       finishedAt: '2026-03-26T12:00:01.000Z'
     };
-    const invoke = jest
+    const stream = jest
       .fn()
-      .mockResolvedValueOnce({
-        content: '',
-        tool_calls: [
-          { id: 'tool-call-1', name: 'get_current_time', args: { timezone: 'UTC' } },
-          { id: 'tool-call-2', name: 'get_current_time', args: { timezone: 'Asia/Shanghai' } }
-        ]
-      })
-      .mockResolvedValueOnce({ content: 'Recovered answer', tool_calls: [] });
+      .mockReturnValueOnce(
+        createChunkStream(
+          createToolChunk({
+            tool_calls: [
+              { id: 'tool-call-1', name: 'get_current_time', args: { timezone: 'UTC' } },
+              { id: 'tool-call-2', name: 'get_current_time', args: { timezone: 'Asia/Shanghai' } }
+            ]
+          })
+        )
+      )
+      .mockReturnValueOnce(createChunkStream(createTextChunk('Recovered answer')));
     const run = jest.fn().mockRejectedValue(
       Object.assign(new Error('Tool execution failed'), {
         execution: toolFailedExecution,
@@ -227,7 +278,7 @@ describe('AgentService', () => {
       })
     );
     const { service } = await createService({
-      invoke,
+      stream,
       listDefinitions: [{ name: 'get_current_time', description: 'Get the current server time in ISO format.' }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
       startToolExecution: jest.fn().mockResolvedValue({
@@ -245,7 +296,7 @@ describe('AgentService', () => {
     });
 
     expect(result.text).toBe('Recovered answer');
-    expect(invoke).toHaveBeenNthCalledWith(
+    expect(stream).toHaveBeenNthCalledWith(
       2,
       expect.arrayContaining([
         expect.objectContaining({ tool_call_id: 'tool-call-1', content: 'Tool execution failed' }),
@@ -281,30 +332,33 @@ describe('AgentService', () => {
       progressMessage: 'Tool completed',
       finishedAt: '2026-03-26T12:00:01.000Z'
     };
-    const invoke = jest
+    const stream = jest
       .fn()
-      .mockResolvedValueOnce({
-        content: '',
-        additional_kwargs: {
-          tool_calls: [
-            {
-              id: 'tool-call-legacy-1',
-              type: 'function',
-              function: {
-                name: 'get_current_time',
-                arguments: '{"timezone":"UTC"}'
-              }
+      .mockReturnValueOnce(
+        createChunkStream(
+          createToolChunk({
+            additional_kwargs: {
+              tool_calls: [
+                {
+                  id: 'tool-call-legacy-1',
+                  type: 'function',
+                  function: {
+                    name: 'get_current_time',
+                    arguments: '{"timezone":"UTC"}'
+                  }
+                }
+              ]
             }
-          ]
-        }
-      })
-      .mockResolvedValueOnce({ content: 'Recovered from legacy tool call', tool_calls: [] });
+          })
+        )
+      )
+      .mockReturnValueOnce(createChunkStream(createTextChunk('Recovered from legacy tool call')));
     const run = jest.fn().mockResolvedValue({
       execution: toolCompletedExecution,
       outputText: JSON.stringify(toolCompletedExecution.output)
     });
     const { service, toolService } = await createService({
-      invoke,
+      stream,
       listDefinitions: [{ name: 'get_current_time', description: 'Get the current server time in ISO format.' }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
       startToolExecution: jest.fn().mockResolvedValue({
@@ -331,7 +385,7 @@ describe('AgentService', () => {
     });
     expect(run).toHaveBeenCalledTimes(1);
     expect(result.text).toBe('Recovered from legacy tool call');
-    expect(invoke).toHaveBeenNthCalledWith(
+    expect(stream).toHaveBeenNthCalledWith(
       2,
       expect.arrayContaining([
         expect.objectContaining({
@@ -364,10 +418,14 @@ describe('AgentService', () => {
       errorMessage: 'Tool execution failed',
       finishedAt: '2026-03-26T12:00:01.000Z'
     };
-    const invoke = jest
+    const stream = jest
       .fn()
-      .mockResolvedValueOnce({ content: '', tool_calls: [{ id: 'tool-call-1', name: 'get_current_time', args: { timezone: 'UTC' } }] })
-      .mockResolvedValueOnce({ content: 'Recovered answer', tool_calls: [] });
+      .mockReturnValueOnce(
+        createChunkStream(
+          createToolChunk({ tool_calls: [{ id: 'tool-call-1', name: 'get_current_time', args: { timezone: 'UTC' } }] })
+        )
+      )
+      .mockReturnValueOnce(createChunkStream(createTextChunk('Recovered answer')));
     const run = jest.fn().mockRejectedValue(
       Object.assign(new Error('Tool execution failed'), {
         execution: toolFailedExecution,
@@ -375,7 +433,7 @@ describe('AgentService', () => {
       })
     );
     const { service, toolService } = await createService({
-      invoke,
+      stream,
       listDefinitions: [{ name: 'get_current_time', description: 'Get the current server time in ISO format.' }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
       startToolExecution: jest.fn().mockResolvedValue({
@@ -424,7 +482,7 @@ describe('AgentService', () => {
         expect.objectContaining({ type: 'run_stage_changed', run: expect.objectContaining({ status: 'COMPLETED', stage: 'FINALIZING' }) })
       ])
     );
-    expect(invoke).toHaveBeenNthCalledWith(
+    expect(stream).toHaveBeenNthCalledWith(
       2,
       expect.arrayContaining([
         expect.objectContaining({ tool_call_id: 'tool-call-1', content: 'Tool execution failed' }),
@@ -450,13 +508,21 @@ describe('AgentService', () => {
       startedAt: '2026-03-26T12:00:00.000Z',
       finishedAt: null
     };
-    const invoke = jest
+    const stream = jest
       .fn()
-      .mockResolvedValueOnce({ content: '', tool_calls: [{ id: 'tool-call-1', name: 'get_current_time', args: { timezone: 'UTC' } }] })
-      .mockResolvedValueOnce({ content: '', tool_calls: [{ id: 'tool-call-2', name: 'get_current_time', args: { timezone: 'UTC' } }] });
+      .mockReturnValueOnce(
+        createChunkStream(
+          createToolChunk({ tool_calls: [{ id: 'tool-call-1', name: 'get_current_time', args: { timezone: 'UTC' } }] })
+        )
+      )
+      .mockReturnValueOnce(
+        createChunkStream(
+          createToolChunk({ tool_calls: [{ id: 'tool-call-2', name: 'get_current_time', args: { timezone: 'UTC' } }] })
+        )
+      );
     const run = jest.fn().mockImplementation(() => new Promise(() => undefined));
     const { service } = await createService({
-      invoke,
+      stream,
       listDefinitions: [{ name: 'get_current_time', description: 'Get the current server time in ISO format.' }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
       startToolExecution: jest.fn().mockResolvedValue({
@@ -522,13 +588,13 @@ describe('AgentService', () => {
       progressMessage: 'Tool completed',
       finishedAt: '2026-03-26T12:00:01.000Z'
     };
-    const invoke = jest.fn();
+    const stream = jest.fn();
     const run = jest.fn().mockResolvedValue({
       execution: toolCompletedExecution,
       outputText: JSON.stringify(toolCompletedExecution.output)
     });
     const { service, toolService } = await createService({
-      invoke,
+      stream,
       listDefinitions: [{ name: 'get_current_time', description: 'Get the current server time in ISO format.' }],
       getDefinition: jest.fn().mockReturnValue({ schema: { parse: jest.fn() } }),
       startToolExecution: jest.fn().mockResolvedValue({
@@ -551,7 +617,7 @@ describe('AgentService', () => {
       (event) => events.push(event)
     );
 
-    expect(invoke).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
     expect(toolService.startToolExecution).toHaveBeenCalledWith('get_current_time', { timezone: 'UTC' }, {
       sessionId: 'session-1',
       userId: 'user-1',

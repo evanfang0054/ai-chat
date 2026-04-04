@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { FailureCategory, RunStage, RunSummary, ToolName, ToolExecutionSummary } from '@ai-chat/shared';
 import { env } from '../../common/config/env';
 import { LlmService } from '../llm/llm.service';
@@ -153,23 +153,23 @@ export class AgentService {
       let response: AIMessage;
       try {
         response = await this.withTimeout(
-          toolAwareModel.invoke(conversation),
+          (async () => {
+            const responseStream = await toolAwareModel.stream(conversation);
+            return this.collectStreamingResponse(responseStream, (textDelta) => {
+              collectedText += textDelta;
+              appendEvent({
+                type: 'text_delta',
+                runId: context.runId ?? randomUUID(),
+                messageId: context.messageId ?? `assistant-${context.sessionId}`,
+                textDelta
+              });
+            });
+          })(),
           env.CHAT_STREAM_TIMEOUT_MS,
           'Agent LLM response'
         );
       } catch (error) {
         throw this.wrapModelError(error, 'MODEL_CALLING');
-      }
-
-      const text = this.readChunkText(response.content);
-      if (text) {
-        collectedText += text;
-        appendEvent({
-          type: 'text_delta',
-          runId: context.runId ?? randomUUID(),
-          messageId: context.messageId ?? `assistant-${context.sessionId}`,
-          textDelta: text
-        });
       }
 
       const toolCalls = this.readToolCalls(response);
@@ -283,6 +283,32 @@ export class AgentService {
         repairAction: 'tool_execution_failed'
       });
     }
+  }
+
+  private async collectStreamingResponse(
+    stream: AsyncIterable<AIMessageChunk>,
+    onText: (textDelta: string) => void
+  ) {
+    let aggregatedChunk: AIMessageChunk | null = null;
+
+    for await (const chunk of stream) {
+      const textDelta = this.readChunkText(chunk.content);
+      if (textDelta) {
+        onText(textDelta);
+      }
+
+      aggregatedChunk = aggregatedChunk ? aggregatedChunk.concat(chunk) : chunk;
+    }
+
+    if (!aggregatedChunk) {
+      return new AIMessage({ content: '' });
+    }
+
+    return new AIMessage({
+      content: aggregatedChunk.content,
+      tool_calls: this.readToolCalls(aggregatedChunk),
+      additional_kwargs: aggregatedChunk.additional_kwargs
+    });
   }
 
   private createRunSummary(
